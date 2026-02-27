@@ -1,5 +1,9 @@
 # Build Status & Session Handoff
 
+## AI agent instructions
+- **Read this file at the start of every session before doing anything else**
+- **Update this file only when the user explicitly asks to update the documents** (typically at end of session)
+
 ## Session handoff note
 > Update this block at the end of every session so the next one knows where to start.
 
