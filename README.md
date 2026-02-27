@@ -1,4 +1,4 @@
-# cosmos-gesture-agent
+# cosmos-gesture-intention-detection
 
 Real-time webcam gesture agent scaffold for NVIDIA Cosmos Cookoff.
 
