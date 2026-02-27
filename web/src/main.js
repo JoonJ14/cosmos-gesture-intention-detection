@@ -1,4 +1,4 @@
-import { callExecutor, callVerifier } from "./api.js";
+import { callExecutor, callVerifier, getVerifierBaseUrl, setVerifierBaseUrl } from "./api.js";
 import {
   createEventId,
   createHandsPipeline,
@@ -13,7 +13,14 @@ const videoElement = document.getElementById("video");
 const overlayElement = document.getElementById("overlay");
 const safeModeToggle = document.getElementById("safeModeToggle");
 const verifierTimeoutInput = document.getElementById("verifierTimeoutMs");
+const verifierUrlInput = document.getElementById("verifierUrl");
 const statusElement = document.getElementById("status");
+
+// Initialize verifier URL input from query param or default, then keep in sync.
+verifierUrlInput.value = getVerifierBaseUrl();
+verifierUrlInput.addEventListener("change", (e) => {
+  setVerifierBaseUrl(e.target.value.trim());
+});
 
 const EVENT_STATES = Object.freeze({
   PROPOSED: "proposed",

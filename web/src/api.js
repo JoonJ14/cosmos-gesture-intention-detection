@@ -1,5 +1,17 @@
 const EXECUTOR_BASE_URL = "http://127.0.0.1:8787";
-const VERIFIER_BASE_URL = "http://127.0.0.1:8788";
+
+// Verifier URL: configurable via ?verifier=http://dgx-ip:8788 query param.
+// Can also be updated at runtime by calling setVerifierBaseUrl().
+const _qpVerifier = new URLSearchParams(window.location.search).get("verifier");
+let _verifierBaseUrl = _qpVerifier || "http://127.0.0.1:8788";
+
+export function getVerifierBaseUrl() {
+  return _verifierBaseUrl;
+}
+
+export function setVerifierBaseUrl(url) {
+  _verifierBaseUrl = url;
+}
 
 async function fetchWithTimeout(url, options, timeoutMs) {
   const controller = new AbortController();
@@ -16,7 +28,7 @@ async function fetchWithTimeout(url, options, timeoutMs) {
 }
 
 export async function callVerifier(payload, timeoutMs = 800) {
-  const url = new URL("/verify", VERIFIER_BASE_URL);
+  const url = new URL("/verify", _verifierBaseUrl);
   if (payload.force_reject === true) {
     url.searchParams.set("force_reject", "true");
   }

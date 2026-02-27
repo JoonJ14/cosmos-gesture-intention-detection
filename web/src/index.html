@@ -55,13 +55,21 @@
         font-size: 14px;
       }
 
-      input[type="number"] {
-        width: 96px;
+      input[type="number"],
+      input[type="text"] {
         background: #0b1220;
         color: var(--fg);
         border: 1px solid #334155;
         border-radius: 6px;
         padding: 6px;
+      }
+
+      input[type="number"] {
+        width: 96px;
+      }
+
+      input[type="text"] {
+        width: 240px;
       }
 
       .video-shell {
@@ -120,6 +128,10 @@
           <label>
             Verifier timeout (ms)
             <input id="verifierTimeoutMs" type="number" min="50" step="50" value="800" />
+          </label>
+          <label>
+            Verifier URL
+            <input id="verifierUrl" type="text" autocomplete="off" spellcheck="false" />
           </label>
         </div>
         <div class="hint">
