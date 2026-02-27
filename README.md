@@ -4,33 +4,46 @@ Real-time webcam gesture agent scaffold for NVIDIA Cosmos Cookoff.
 
 ## Architecture Diagram
 ```text
-+--------------------------+
-| Browser Web App          |
-| - Webcam                 |
-| - MediaPipe Hands        |
-| - Intent Proposal Stub   |
-+------------+-------------+
-             |
-             | HTTP /verify (Safe Mode)
-             v
-+--------------------------+
-| Verifier Service         |
-| - Stub now               |
-| - Cosmos Reason later    |
-| - Strict JSON response   |
-+------------+-------------+
-             |
-             | Approved intent
-             v
-+--------------------------+
-| Executor Service         |
-| - actions.yaml mapping   |
-| - xdotool (Linux X11)    |
-| - osascript (macOS)      |
-+------------+-------------+
-             |
-             v
-      OS Key Injection
+                 ┌──────────────────────────────────────────────┐
+                 │               Web App (JS)                   │
+                 │  MediaPipe Hands (browser)                   │
+                 │  Gesture state machine + confidence          │
+                 │  Ring buffer: last ~1s frames                │
+                 │  UI overlay + event log view                 │
+                 └───────────────┬──────────────────────────────┘
+                                 │
+                 proposes intent │  POST /execute
+                 and decides     │  { intent, event_id }
+                 whether to      v
+                 verify          ┌──────────────────────────────┐
+                                 │      Action Executor (PY)    │
+                                 │   FastAPI on localhost       │
+                                 │   Reads actions.yaml         │
+                                 │   Sends OS key events        │
+                                 │   Linux GNOME X11: xdotool   │
+                                 │   macOS: osascript or Quartz │
+                                 │   Logs JSONL per action      │
+                                 └──────────────────────────────┘
+
+                                 │  only for ambiguous cases
+                                 │  POST /verify
+                                 │  { proposed_intent, frames[], landmark_summary, event_id }
+                                 v
+                 ┌──────────────────────────────────────────────┐
+                 │           Cosmos Verifier (PY)               │
+                 │   FastAPI on DGX Spark                       │
+                 │   Validates strict JSON schema               │
+                 │   Logs JSONL per verification                │
+                 └───────────────┬──────────────────────────────┘
+                                 │
+                                 │  OpenAI compatible HTTP call
+                                 │  /v1/chat/completions
+                                 v
+                 ┌──────────────────────────────────────────────┐
+                 │      Cosmos Reason 2 NIM (DGX Spark)          │
+                 │   Model inference service                     │
+                 │   Returns strict JSON: intentional or not     │
+                 └──────────────────────────────────────────────┘
 ```
 
 ## Runtime Flow Diagram
