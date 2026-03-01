@@ -50,10 +50,15 @@ Cosmos earns its role by solving what heuristics fundamentally cannot: distingui
 
 | Intent | Gesture | Action (Linux / macOS) |
 |--------|---------|------------------------|
-| `OPEN_MENU` | Open palm, five fingers spread, held ~0.3s | Super key / Ctrl+Up (Mission Control) |
-| `CLOSE_MENU` | Open palm → closed fist transition | Escape |
-| `SWITCH_RIGHT` | Right hand swipes right→left | Ctrl+Right / Ctrl+Right |
-| `SWITCH_LEFT` | Left hand swipes left→right | Ctrl+Left / Ctrl+Left |
+| `OPEN_MENU` | Make a fist, then open palm (≥4 fingers spread, held ~0.3 s) | Super key / Ctrl+Up (Mission Control) |
+| `CLOSE_MENU` | Hold open palm still ~0.3 s, then close to fist and hold ~0.15 s | Escape |
+| `SWITCH_RIGHT` | Either hand sweeps leftward across the mirrored screen | Ctrl+Right / Ctrl+Right |
+| `SWITCH_LEFT` | Either hand sweeps rightward across the mirrored screen | Ctrl+Left / Ctrl+Left |
+
+**Notes:**
+- The webcam is displayed in selfie/mirror mode — your right hand appears on the right side of the screen.
+- Swipes are **pose-agnostic**: open palm, edge of hand, loose fist all work equally. Either hand can trigger either direction.
+- OPEN_MENU requires a deliberate fist→palm transition to avoid accidental triggers from resting an open hand.
 
 ## Why Cosmos Is Necessary (Not Optional)
 
@@ -95,9 +100,16 @@ Open `http://127.0.0.1:5173`, allow webcam access. Press keys `1`–`4` to test 
 - **MacBook Air** (Apple Silicon) — development and secondary demo platform
 - USB webcam on DGX Spark; built-in camera on Mac
 
-## Stretch Goal: Teacher-Student Feedback Loop
+## Teacher-Student Feedback Loop (Option 2 — Core Deliverable)
 
-The system logs every proposal, verification, and execution as structured JSONL. This enables a continuous improvement loop where Cosmos acts as a **teacher** labeling ambiguous cases, and a lightweight local **student** classifier trains on those labels to improve over time — gradually reducing Cosmos calls while maintaining accuracy.
+The gesture state machine is intentionally **high-recall / low-precision**: it fires on many candidate gestures, including false positives. Cosmos acts as the **teacher**, labeling every proposal with ground-truth intent via visual reasoning. A lightweight local **student classifier** (logistic regression or small random forest) trains on those labels and takes over filtering in real time.
+
+**Three phases:**
+1. **Phase 1** — 100% of proposals go to Cosmos for labeling
+2. **Phase 2** — When student-Cosmos agreement exceeds 90%, reduce sampling to ~50%
+3. **Phase 3** — When agreement exceeds 95%, spot-check only (10–20%)
+
+A small random percentage always goes to Cosmos (never 0%) to detect student blind spots.
 
 See [Option 2 Design & Risks](docs/OPTION2_RISKS_AND_MITIGATIONS.md) for the full design, failure modes, and safeguards.
 

@@ -1,168 +1,338 @@
 # Gesture Detection Specification
 
-This document specifies the gesture detection algorithm for `web/src/gesture.js:proposeGestureFromLandmarks()`. It is the implementation reference for the local perception layer.
+This document specifies the gesture detection algorithm for `web/src/gesture.js:proposeGestureFromLandmarks()`. It is the authoritative implementation reference for the local perception layer.
+
+**Last updated: 2026-03-01** — reflects the current implementation after the Block 1/1b session.
+
+---
 
 ## Overview
 
-MediaPipe Hands provides 21 landmarks per hand, per frame, plus handedness (Left/Right) and detection confidence. The gesture detection logic tracks these landmarks over time using a state machine to classify temporal motion patterns into intent proposals.
+MediaPipe Hands provides 21 landmarks per hand, per frame, plus handedness (Left/Right) and detection confidence. The gesture detection logic tracks these landmarks over time using per-hand state machines to classify temporal motion patterns into intent proposals.
 
-## Input from MediaPipe
+---
+
+## Display coordinate system (important)
+
+The video element and canvas overlay both have CSS `transform: scaleX(-1)` applied, creating a selfie/bathroom-mirror view. This means:
+
+- **Screen-right ≡ low raw x** (camera's left edge)
+- **Screen-left ≡ high raw x** (camera's right edge)
+- MediaPipe landmark coordinates are in **raw camera space** (unaffected by CSS transforms)
+- All gesture math uses raw coordinates; the mirror mapping is accounted for in the direction logic
+
+---
+
+## MediaPipe input
 
 Each frame callback receives:
-- `multiHandLandmarks[]` — array of hands, each with 21 normalized landmarks (x, y, z in [0, 1])
+- `multiHandLandmarks[]` — array of hands, each with 21 normalized landmarks (`x`, `y`, `z` in [0, 1])
 - `multiHandedness[]` — array of `{label: "Left"|"Right", score: float}`
 
-Key landmarks used:
-- **Wrist** (landmark 0) — primary position tracker for swipe detection
-- **Middle finger MCP** (landmark 9) — secondary position reference
-- **Fingertips** (landmarks 4, 8, 12, 16, 20) — for finger extension detection
-- **Finger MCPs** (landmarks 2, 5, 9, 13, 17) — for palm facing / finger extension comparison
+Key landmarks:
+- **Wrist** (0) — primary position tracker for swipe and palm detection
+- **Thumb MCP/TIP** (2, 4) — thumb extension check
+- **Index MCP/TIP** (5, 8), **Middle MCP/TIP** (9, 12), **Ring MCP/TIP** (13, 16), **Pinky MCP/TIP** (17, 20)
 
-## Gesture definitions
+---
 
-### SWITCH_RIGHT
+## Finger extension detection
 
-- **Trigger hand:** Right hand
-- **Motion:** Wrist x-coordinate decreases (hand moves right→left in camera view) by ≥30% of frame width
-- **Time window:** 0.4–0.9 seconds from start of motion to completion
-- **Optional filter:** Four or more fingers extended (flat hand, not a fist) to reduce false positives
-- **Cooldown:** 1.5 seconds after any successful execution
+```javascript
+// Thumb: tip x farther from wrist than MCP x (extends laterally)
+thumbExtended = |tip.x − wrist.x| > |mcp.x − wrist.x|
 
-### SWITCH_LEFT
-
-- **Trigger hand:** Left hand
-- **Motion:** Wrist x-coordinate increases (hand moves left→right in camera view) by ≥30% of frame width
-- **Time window:** 0.4–0.9 seconds from start of motion to completion
-- **Optional filter:** Four or more fingers extended
-- **Cooldown:** 1.5 seconds after any successful execution
-
-### OPEN_MENU
-
-- **Trigger hand:** Either hand
-- **Pose:** Palm facing camera, all five fingers extended and spread
-- **Hold duration:** ≥0.3 seconds of stable open palm pose
-- **Motion constraint:** Hand should be mostly stationary (wrist displacement < 5% frame width during hold)
-- **Cooldown:** 1.5 seconds after any successful execution
-
-### CLOSE_MENU
-
-- **Trigger hand:** Either hand
-- **Pose transition:** Hand transitions from open palm (fingers extended) to closed fist (fingers curled)
-- **Time window:** Transition completes within 0.3–0.8 seconds
-- **Requirement:** Must see at least 3 frames of open palm before fist is detected
-- **Cooldown:** 1.5 seconds after any successful execution
-
-## Detection algorithm
-
-### Finger extension detection
-
-A finger is considered "extended" when the fingertip y-coordinate is above (less than, since y increases downward) the corresponding MCP joint, adjusted for hand orientation:
-
-```
-finger_extended = (fingertip.y < finger_mcp.y)  // simplified; needs palm orientation correction
+// Other four fingers: tip y above MCP y (y increases downward)
+fingerExtended = tip.y < mcp.y
 ```
 
-For the thumb, use x-axis distance from the wrist instead (thumb extends laterally).
+`countExtendedFingers(lms)` returns 0–5.
 
-**Palm facing detection:** When the palm faces the camera, the z-coordinates of the fingertips are closer to the camera (lower z) than the wrist. Combine with finger extension to detect open palm.
+**Palm facing detection:** palm faces camera when average fingertip z < wrist z (fingertips closer to camera).
 
-### Swipe detection state machine
+---
 
-Track per-hand state over a sliding time window:
+## Hand acceptance
 
 ```
-States: IDLE → TRACKING → PROPOSED
+MIN_HAND_SPAN   = 0.025   // hands spanning < 2.5% of frame width are ignored (too far/small)
+REQUIRED_FRAMES = 1       // frames tracked before state machines activate (immediate)
+```
 
+On each frame per hand: if `getHandSpan(lms) < MIN_HAND_SPAN`, skip but still mark as present (prevents state reset). After `REQUIRED_FRAMES` consecutive frames, `hs.accepted = true`.
+
+---
+
+## Gesture definitions and state machines
+
+### SWITCH\_RIGHT and SWITCH\_LEFT (swipe)
+
+**Pose-agnostic**: any hand pose works. Detection is based solely on wrist (LM 0) x-displacement. Either hand can trigger either direction.
+
+**Direction mapping with CSS mirror:**
+- Raw x DECREASES → hand moved toward screen-right → **SWITCH\_LEFT**
+- Raw x INCREASES → hand moved toward screen-left → **SWITCH\_RIGHT**
+
+**Thresholds:**
+```
+SWIPE_MIN_DISPLACEMENT = 0.15   // 15% of frame width minimum
+SWIPE_MIN_DURATION     = 0.20   // seconds
+SWIPE_MAX_DURATION     = 1.5    // seconds
+```
+
+**State machine:** `IDLE → TRACKING → (emit) → IDLE`
+
+```
 IDLE:
-  - Hand appears and is tracked for ≥3 consecutive frames
-  - Record initial wrist position and timestamp
-  - Transition to TRACKING
+  Record startX = wrist.x, startTs = now
+  → TRACKING
 
-TRACKING:
-  - Each frame, compute cumulative x-displacement from initial position
-  - If displacement ≥ 30% frame width AND elapsed time is 0.4–0.9s:
-    → Transition to PROPOSED, emit intent proposal
-  - If elapsed time > 0.9s without threshold:
-    → Reset to IDLE
-  - If hand lost:
-    → Reset to IDLE
+TRACKING (each frame):
+  rightDisp = startX − wX        // positive when x decreased (screen-right)
+  leftDisp  = wX − startX        // positive when x increased (screen-left)
 
-PROPOSED:
-  - Intent emitted, enter cooldown
-  - After cooldown (1.5s), return to IDLE
+  if elapsed > SWIPE_MAX_DURATION:
+    → IDLE (timeout)
+
+  if rightDisp ≥ SWIPE_MIN_DISPLACEMENT AND elapsed ≥ SWIPE_MIN_DURATION:
+    emit SWITCH_LEFT, → IDLE
+
+  if leftDisp ≥ SWIPE_MIN_DISPLACEMENT AND elapsed ≥ SWIPE_MIN_DURATION:
+    emit SWITCH_RIGHT, → IDLE
 ```
 
-### Open palm detection state machine
+**Debug log (every TRACKING frame):**
+```
+[SWIPE] tracking: Right, rawDisplacement: -0.183, screenDir: RIGHT, duration: 0.312s
+```
+
+---
+
+### OPEN\_MENU (fist → palm transition)
+
+Requires a **deliberate fist→palm** transition. Static open palm without a prior fist never fires.
+
+**Pose thresholds:**
+```
+isFist = countExtendedFingers ≤ 2    // ≤2 allows thumb to stick out
+isOpen = countExtendedFingers ≥ 4 AND isPalmFacing
+
+FIST_HOLD_MS   = 100    // ms fist must be held before palm phase starts
+PALM_HOLD_MS   = 300    // ms open palm must be held (stable)
+PALM_STABILITY = 0.05   // max wrist drift during palm hold (fraction of frame width)
+```
+
+**State machine:** `IDLE → FIST_DETECTED → PALM_OPENED → (emit) → IDLE`
 
 ```
-States: IDLE → PALM_DETECTED → HOLDING → PROPOSED
-
 IDLE:
-  - Each frame, check if all 5 fingers extended AND palm facing camera
-  - If yes: record timestamp, transition to PALM_DETECTED
+  if isFist:
+    fistStartTs = now
+    → FIST_DETECTED
 
-PALM_DETECTED / HOLDING:
-  - Continue checking open palm pose each frame
-  - Track wrist stability (must stay within 5% frame width of initial position)
-  - If pose held for ≥ 0.3s: transition to PROPOSED, emit OPEN_MENU
-  - If pose breaks: reset to IDLE
+FIST_DETECTED (each frame):
+  fistDurMs = now − fistStartTs
+  if isFist:
+    keep waiting
+  else if isOpen AND fistDurMs ≥ FIST_HOLD_MS:
+    palmStartTs = now, startWX = wrist.x
+    → PALM_OPENED
+  else:
+    → IDLE (ambiguous pose or fist too brief)
 
-PROPOSED:
-  - Enter cooldown, return to IDLE after 1.5s
+PALM_OPENED (each frame):
+  elapsed    = now − palmStartTs
+  wristDelta = |wrist.x − startWX|
+  if NOT isOpen:   → IDLE
+  if wristDelta > PALM_STABILITY:  → IDLE (wrist drifted)
+  if elapsed ≥ PALM_HOLD_MS / 1000:
+    emit OPEN_MENU, → IDLE
 ```
 
-### Close menu detection
+**Debug logs:**
+```
+[OPEN_MENU] entered updatePalm
+[OPEN_MENU] state: FIST_DETECTED, fingersExtended: 1, fistDuration: 87ms
+[OPEN_MENU] state: PALM_OPENED, fingersExtended: 4, palmDuration: 210ms
+```
+
+---
+
+### CLOSE\_MENU (palm → fist transition)
+
+Requires a **deliberate, still palm** followed by an **explicit in-frame fist held briefly**. Hand withdrawal (disappearing from frame) does NOT trigger.
+
+**Pose thresholds:**
+```
+isOpen = countExtendedFingers ≥ 4 AND isPalmFacing
+isFist = countExtendedFingers ≤ 2
+
+CLOSE_MIN_MS         = 300    // min palm hold before fist is accepted
+CLOSE_MAX_MS         = 1000   // total sequence timeout
+CLOSE_FIST_HOLD_MS   = 150    // fist must be held this long to fire
+CLOSE_PALM_MAX_DRIFT = 0.06   // max wrist drift during palm phase (rejects reaching/withdrawal)
+```
+
+**State machine:** `IDLE → OPEN_SEEN → FIST_SEEN → (emit) → IDLE`
 
 ```
-States: IDLE → OPEN_SEEN → CLOSING → PROPOSED
-
 IDLE:
-  - Detect open palm (same criteria as OPEN_MENU)
-  - If open palm seen for ≥ 3 frames: transition to OPEN_SEEN, record timestamp
+  if isOpen: openCount++
+    if openCount ≥ REQUIRED_FRAMES:
+      if OPEN_MENU is in FIST_DETECTED or PALM_OPENED:
+        openCount = 0; return  ← OPEN_MENU has priority, defer
+      startTs = now, palmStartWX = wrist.x
+      → OPEN_SEEN
+  else: openCount = 0
 
-OPEN_SEEN:
-  - Monitor finger extension count each frame
-  - If extension count drops to ≤ 1 (fist) within 0.3–0.8s of OPEN_SEEN start:
-    → Transition to PROPOSED, emit CLOSE_MENU
-  - If > 0.8s without fist: reset to IDLE
-  - If hand lost: reset to IDLE
+OPEN_SEEN (each frame):
+  elapsed       = now − startTs
+  wristMovement = |wrist.x − palmStartWX|
+
+  if wristMovement > CLOSE_PALM_MAX_DRIFT:  → IDLE  (hand moving)
+  if elapsed > CLOSE_MAX_MS / 1000:          → IDLE  (timeout)
+  if isOpen: keep waiting
+  if isFist AND elapsed ≥ CLOSE_MIN_MS / 1000:
+    fistStartTs = now
+    → FIST_SEEN
+  else: → IDLE  (ambiguous or palm ended too soon)
+
+FIST_SEEN (each frame):
+  fistElapsed = now − fistStartTs
+  if NOT isFist:  → IDLE  (fist broke)
+  if palmElapsed > CLOSE_MAX_MS / 1000 + CLOSE_FIST_HOLD_MS / 1000:  → IDLE
+  if fistElapsed ≥ CLOSE_FIST_HOLD_MS / 1000:
+    emit CLOSE_MENU, → IDLE
 ```
 
-## Local confidence scoring
+**Debug logs:**
+```
+[CLOSE_MENU] entered updateClose
+[CLOSE_MENU] IDLE: OPEN_MENU is in FIST_DETECTED, deferring OPEN_SEEN
+[CLOSE_MENU] state: OPEN_SEEN, palmDur: 287ms, wristMovement: 0.021, fingersExtended: 4
+[CLOSE_MENU] state: FIST_SEEN, fistDur: 112ms, fingersExtended: 1
+```
 
-Each proposal should include a local confidence score (0 to 1) based on:
+---
 
-| Factor | Weight | Description |
-|--------|--------|-------------|
-| MediaPipe detection confidence | 0.25 | Raw confidence from MediaPipe hand detection |
-| Displacement margin | 0.25 | How far past the 30% threshold the swipe went (for swipe gestures) |
-| Temporal fit | 0.20 | How well the timing matches the expected window (centered = higher) |
-| Pose stability | 0.15 | Consistency of finger extension / palm facing across frames in the window |
-| Hand size / distance | 0.15 | Larger hand in frame (closer to camera) = more reliable landmarks |
+## Mutual exclusion and priority
 
-This score feeds the confidence-gated routing:
-- **HIGH (≥ 0.85):** Execute directly
-- **MEDIUM (0.5–0.85):** Send to Cosmos for verification
-- **LOW (< 0.5):** Ignore
+**OPEN_MENU priority** (more specific gesture wins):
 
-## Ring buffer for evidence windows
+Once OPEN_MENU has detected a fist and entered FIST_DETECTED or PALM_OPENED (`openMenuActive = true`):
+1. `updateClose` IDLE block: if `hs.palm.state === "FIST_DETECTED" || "PALM_OPENED"` → resets `openCount = 0`, returns without advancing to OPEN_SEEN.
+2. Main dispatch loop: the `closeIsTracking && !openMenuActive` guard is false, so the suppression reset is skipped and `updatePalm` is called regardless.
 
-The web app should maintain a circular buffer of recent frames:
+**CLOSE_MENU suppresses OPEN_MENU** (when OPEN_MENU hasn't started yet):
 
-- **Buffer size:** ~30 frames (~1 second at 30 fps)
-- **Storage format:** Each entry stores the video frame as a `canvas.toDataURL('image/jpeg', 0.7)` base64 string, plus the corresponding landmarks and timestamp
-- **On proposal:** Extract 8–12 evenly-spaced frames from the buffer covering the gesture window
-- **Purpose:** Sent to the verifier as the evidence for Cosmos to reason about
+When `closeIsTracking` (close state is OPEN_SEEN or FIST_SEEN) AND `!openMenuActive` (palm state is IDLE):
+- Resets `hs.palm` to IDLE (clears any partial state)
+- Skips `updatePalm` call for that frame
+
+---
+
+## Global dispatch loop
+
+```
+proposeGestureFromLandmarks(results):
+  log "[GESTURE FRAME] hands detected: N"    ← always, before any guard
+
+  cooldownRemaining = COOLDOWN_MS − (now − lastProposalTs)
+  if cooldownRemaining > 0:
+    log "[GESTURE FRAME] in cooldown, Xms remaining"
+    return null
+
+  for each hand:
+    skip if: no handedness | bad landmarks | span < MIN_HAND_SPAN | not yet accepted
+
+    closeIsTracking = close.state ∈ {OPEN_SEEN, FIST_SEEN}
+    openMenuActive  = palm.state ∈ {FIST_DETECTED, PALM_OPENED}
+
+    if closeIsTracking AND NOT openMenuActive:
+      reset palm to IDLE
+
+    log "[GESTURE FRAME] side: accepted, swipe=X close=X palm=X ..."
+
+    proposal = updateSwipe(...)
+    if !proposal: proposal = updateClose(...)
+    if !proposal AND (!closeIsTracking OR openMenuActive): proposal = updatePalm(...)
+
+    if proposal:
+      lastProposalTs = now
+      resetHandState(Left), resetHandState(Right)
+      return proposal
+
+  reset state for any hand not seen this frame
+  return null
+```
+
+---
 
 ## Global cooldown
 
-After any intent is executed (or rejected by verifier), no new proposals are accepted for 1.5 seconds. This prevents:
-- Repeated triggers from a single gesture
-- Rapid accidental triggering during hand repositioning after a gesture
+```
+COOLDOWN_MS = 1500   // ms after any gesture fires before detection resumes
+```
 
-## Edge cases to handle
+After any proposal is emitted, all state machines are reset and the cooldown blocks `proposeGestureFromLandmarks` entirely for 1.5 s.
 
-- **Both hands visible:** Each hand tracks independently. A right-hand swipe and left-hand palm are separate state machines.
-- **Hand switching:** If handedness flips between frames (MediaPipe inconsistency), require 3+ consistent frames before accepting handedness.
-- **Small hands / far from camera:** If the hand bounding box is very small (e.g., landmarks span < 5% of frame), ignore — landmark accuracy drops significantly at distance.
-- **Rapid hand entry/exit:** Don't trigger swipe when a hand enters the frame from the side — require hand to be tracked for ≥3 frames before starting swipe detection.
+---
+
+## Local confidence scoring
+
+### Swipe
+
+| Factor | Weight | Notes |
+|--------|--------|-------|
+| MediaPipe confidence | 0.30 | Raw score from MediaPipe handedness |
+| Displacement margin | 0.40 | How far past 15% threshold the swipe went |
+| Temporal fit | 0.15 | How close elapsed is to center of [0.2 s, 1.5 s] window |
+| Hand size | 0.15 | Larger = landmarks more reliable |
+
+Pose stability removed (swipe is pose-agnostic).
+
+### OPEN_MENU (palm hold)
+
+| Factor | Weight | Notes |
+|--------|--------|-------|
+| MediaPipe confidence | 0.25 | |
+| Finger extension | 0.25 | count / 5 |
+| Hold duration | 0.20 | bonus beyond 0.3 s |
+| Wrist stability | 0.15 | penalises drift |
+| Hand size | 0.15 | |
+
+### CLOSE_MENU (palm→fist)
+
+| Factor | Weight | Notes |
+|--------|--------|-------|
+| MediaPipe confidence | 0.25 | |
+| Closure decisiveness | 0.25 | (openFingers − closeFingers) / openFingers |
+| Temporal fit | 0.20 | centered on 0.55 s window |
+| Gesture quality | 0.15 | fixed 1.0 (transition gesture) |
+| Hand size | 0.15 | |
+
+---
+
+## Confidence routing
+
+- **HIGH ≥ 0.85**: execute directly (not yet implemented — currently all go async)
+- **MEDIUM 0.5–0.85**: send to Cosmos for async verification
+- **LOW < 0.5**: ignore
+
+---
+
+## Ring buffer for evidence windows
+
+- **Buffer size**: 30 frames (~1 s at 30 fps) in `web/src/ringbuffer.js`
+- **Storage**: each entry = `canvas.toDataURL('image/jpeg', 0.7)` + landmarks + timestamp
+- **On proposal**: `getEvidenceWindow(8)` extracts 8 evenly-spaced frames
+- **Purpose**: sent to Cosmos verifier as visual evidence
+
+---
+
+## Edge cases
+
+- **Both hands visible**: each hand has independent state (`perHand.Left`, `perHand.Right`). Gestures on different hands don't interfere except via the global cooldown.
+- **Hand disappears mid-sequence**: state is reset to IDLE for that hand on the next frame it is absent.
+- **CLOSE_MENU + OPEN_MENU conflict**: handled by the mutual exclusion logic above. The more-specific gesture (OPEN_MENU with fist precondition) always wins.
+- **Swipe false positives from hand entry**: since `REQUIRED_FRAMES = 1`, swipe tracking starts immediately. The displacement threshold (15%) and min duration (0.2 s) filter out instantaneous entry artifacts.
