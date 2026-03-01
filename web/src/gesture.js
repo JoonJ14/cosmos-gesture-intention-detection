@@ -7,17 +7,19 @@ const LM_RING_MCP   = 13; const LM_RING_TIP   = 16;
 const LM_PINKY_MCP  = 17; const LM_PINKY_TIP  = 20;
 
 // ─── Detection thresholds (spec: docs/GESTURE_DETECTION.md) ──────────────────
-const SWIPE_MIN_DISPLACEMENT = 0.20; // fraction of frame width (min x-displacement)
-const SWIPE_MIN_DURATION     = 0.25; // seconds (min swipe duration)
-const SWIPE_MAX_DURATION     = 1.2;  // seconds (max swipe duration)
-const PALM_HOLD_MS     = 300;   // stable hold duration for OPEN_MENU (palm phase)
-const FIST_HOLD_MS     = 150;   // min fist hold before palm transition counts (OPEN_MENU)
-const PALM_STABILITY   = 0.05;  // max wrist movement during hold
-const CLOSE_MIN_MS     = 300;
-const CLOSE_MAX_MS     = 800;
-const REQUIRED_FRAMES  = 3;     // consecutive frames before accepting hand
-const MIN_HAND_SPAN    = 0.05;  // ignore hands < 5% of frame (too far / small)
-const COOLDOWN_MS      = 1500;  // global cooldown after any proposal
+const SWIPE_MIN_DISPLACEMENT  = 0.15; // fraction of frame width (min x-displacement)
+const SWIPE_MIN_DURATION      = 0.20; // seconds (min swipe duration)
+const SWIPE_MAX_DURATION      = 1.5;  // seconds (max swipe duration)
+const PALM_HOLD_MS            = 300;  // stable palm hold for OPEN_MENU
+const FIST_HOLD_MS            = 100;  // min fist hold before palm transition (OPEN_MENU)
+const PALM_STABILITY          = 0.05; // max wrist drift during OPEN_MENU palm hold
+const CLOSE_MIN_MS            = 300;  // min palm hold before fist accepted (CLOSE_MENU)
+const CLOSE_MAX_MS            = 1000; // total timeout for CLOSE_MENU sequence
+const CLOSE_FIST_HOLD_MS      = 150;  // fist must be held this long to fire CLOSE_MENU
+const CLOSE_PALM_MAX_DRIFT    = 0.06; // max wrist drift during CLOSE_MENU palm phase
+const REQUIRED_FRAMES         = 3;    // consecutive frames before accepting hand
+const MIN_HAND_SPAN           = 0.05; // ignore hands < 5% of frame (too far / small)
+const COOLDOWN_MS             = 1500; // global cooldown after any proposal
 
 // ─── Finger & palm helpers ────────────────────────────────────────────────────
 
@@ -56,16 +58,15 @@ function getHandSpan(lms) {
 
 function r2(v) { return Math.round(v * 100) / 100; }
 
-function swipeConfidence(mpConf, displacement, elapsed, fingerCount, handSpan) {
-  // Displacement margin: how far past the 20% threshold the swipe went
+// fingerCount removed — swipe detection is pose-agnostic; pose stability weight
+// redistributed to displacement and mpConf.
+function swipeConfidence(mpConf, displacement, elapsed, handSpan) {
+  // Displacement margin: how far past the 15% threshold the swipe went
   const dispMargin = Math.min(1, Math.max(0, (displacement - SWIPE_MIN_DISPLACEMENT) / SWIPE_MIN_DISPLACEMENT));
-  // Temporal fit: ideal center of [0.25s, 1.2s] window = 0.725s, half-width = 0.475s
-  const temporal   = Math.max(0, 1 - Math.abs(elapsed - 0.725) / 0.475);
-  // Pose stability: prefer extended fingers (flat hand vs fist)
-  const stability  = Math.min(1, fingerCount / 4);
+  // Temporal fit: ideal center of [0.2s, 1.5s] window = 0.85s, half-width = 0.65s
+  const temporal   = Math.max(0, 1 - Math.abs(elapsed - 0.85) / 0.65);
   const size       = Math.min(1, Math.max(0, (handSpan - MIN_HAND_SPAN) / 0.35));
-  return r2(0.25 * mpConf + 0.25 * dispMargin + 0.20 * temporal +
-            0.15 * stability + 0.15 * size);
+  return r2(0.30 * mpConf + 0.40 * dispMargin + 0.15 * temporal + 0.15 * size);
 }
 
 function palmConfidence(mpConf, fingerCount, holdSec, wristDelta, handSpan) {
@@ -101,7 +102,7 @@ function makeHandState() {
     accepted: false,   // true once frames >= REQUIRED_FRAMES
     swipe: { state: "IDLE", startX: null, startTs: null, trajX: [] },
     palm:  { state: "IDLE", fistStartTs: null, palmStartTs: null, startWX: null, openCount: 0 },
-    close: { state: "IDLE", startTs: null, openCount: 0, openFingers: 0 },
+    close: { state: "IDLE", startTs: null, palmStartWX: null, openCount: 0, openFingers: 0, fistStartTs: null },
   };
 }
 
@@ -110,7 +111,7 @@ function resetHandState(hs) {
   hs.accepted = false;
   hs.swipe = { state: "IDLE", startX: null, startTs: null, trajX: [] };
   hs.palm  = { state: "IDLE", fistStartTs: null, palmStartTs: null, startWX: null, openCount: 0 };
-  hs.close = { state: "IDLE", startTs: null, openCount: 0, openFingers: 0 };
+  hs.close = { state: "IDLE", startTs: null, palmStartWX: null, openCount: 0, openFingers: 0, fistStartTs: null };
 }
 
 const perHand = { Right: makeHandState(), Left: makeHandState() };
@@ -118,26 +119,23 @@ let lastProposalTs = -Infinity;
 
 // ─── Swipe (SWITCH_RIGHT / SWITCH_LEFT) ──────────────────────────────────────
 //
-// Selfie/mirror coordinate note: MediaPipe returns raw camera-frame coordinates
-// where x=0 is the LEFT edge of the sensor. Because the user faces the camera,
-// their right hand sits at low x values (camera's left). A physical rightward
-// swipe (right hand moving toward the user's left) therefore INCREASES x in the
-// raw camera frame.
+// Pose-agnostic: any hand pose (open, sideways, loose fist) can swipe.
+// Detection is based solely on the wrist landmark (0) x-displacement over time.
+// Either hand can trigger either direction.
 //
-// SWITCH_RIGHT: right hand, wrist x INCREASES ≥20% (user swipes right hand left).
-// SWITCH_LEFT:  left hand,  wrist x DECREASES ≥20% (user swipes left hand right).
+// Coordinate system with CSS scaleX(-1) mirror applied to the video element:
+//   screen-right ≡ low raw x  |  screen-left ≡ high raw x
+//   raw x DECREASES → hand moved toward screen-RIGHT → SWITCH_RIGHT
+//   raw x INCREASES → hand moved toward screen-LEFT  → SWITCH_LEFT
 //
 // State: IDLE → TRACKING → (proposal emitted) → IDLE
 //
 function updateSwipe(side, hs, lms, mpConf, now) {
-  const sw      = hs.swipe;
-  const wX      = lms[LM_WRIST].x;
-  const fingers = countExtendedFingers(lms);
-  const span    = getHandSpan(lms);
+  const sw   = hs.swipe;
+  const wX   = lms[LM_WRIST].x;
+  const span = getHandSpan(lms);
 
   if (sw.state === "IDLE") {
-    // Start a fresh tracking window from the current wrist position.
-    // (The 3-frame entry guard is handled at the caller level via hs.accepted.)
     sw.startX  = wX;
     sw.startTs = now;
     sw.trajX   = [wX];
@@ -147,32 +145,54 @@ function updateSwipe(side, hs, lms, mpConf, now) {
 
   if (sw.state === "TRACKING") {
     sw.trajX.push(wX);
-    const elapsed      = (now - sw.startTs) / 1000;
-    // Mirror correction: physical rightward swipe → x INCREASES for right hand;
-    //                    physical leftward swipe  → x DECREASES for left hand.
-    const displacement = side === "Right" ? wX - sw.startX   // x increases
-                                          : sw.startX - wX;  // x decreases
+    const elapsed   = (now - sw.startTs) / 1000;
+    const rawDelta  = wX - sw.startX;  // positive = x increased = screen-left motion
+    const screenDir = rawDelta < 0 ? "RIGHT" : "LEFT";
+
+    console.log(
+      `[SWIPE] tracking: ${side}, rawDisplacement: ${rawDelta.toFixed(3)},` +
+      ` screenDir: ${screenDir}, duration: ${elapsed.toFixed(3)}s`,
+    );
 
     if (elapsed > SWIPE_MAX_DURATION) {
-      // Time window exceeded — reset for next attempt
       sw.state = "IDLE";
       return null;
     }
 
-    if (displacement >= SWIPE_MIN_DISPLACEMENT && elapsed >= SWIPE_MIN_DURATION) {
-      const intent = side === "Right" ? "SWITCH_RIGHT" : "SWITCH_LEFT";
-      const conf   = swipeConfidence(mpConf, displacement, elapsed, fingers, span);
+    // With CSS scaleX(-1): raw x decreasing = moving toward screen-right = SWITCH_RIGHT
+    const rightDisp = sw.startX - wX;   // positive when x decreased
+    const leftDisp  = wX - sw.startX;   // positive when x increased
+
+    if (rightDisp >= SWIPE_MIN_DISPLACEMENT && elapsed >= SWIPE_MIN_DURATION) {
+      const conf = swipeConfidence(mpConf, rightDisp, elapsed, span);
       sw.state = "IDLE";
       return {
-        intent,
+        intent: "SWITCH_RIGHT",
         confidence: conf,
         landmarkSummary: {
-          handedness:          side,
-          wrist_trajectory_x:  [...sw.trajX],
-          displacement_pct:    r2(displacement),
-          duration_s:          r2(elapsed),
-          fingers_extended:    fingers,
-          palm_facing_camera:  isPalmFacing(lms),
+          handedness:         side,
+          wrist_trajectory_x: [...sw.trajX],
+          displacement_pct:   r2(rightDisp),
+          duration_s:         r2(elapsed),
+          fingers_extended:   countExtendedFingers(lms),
+          palm_facing_camera: isPalmFacing(lms),
+        },
+      };
+    }
+
+    if (leftDisp >= SWIPE_MIN_DISPLACEMENT && elapsed >= SWIPE_MIN_DURATION) {
+      const conf = swipeConfidence(mpConf, leftDisp, elapsed, span);
+      sw.state = "IDLE";
+      return {
+        intent: "SWITCH_LEFT",
+        confidence: conf,
+        landmarkSummary: {
+          handedness:         side,
+          wrist_trajectory_x: [...sw.trajX],
+          displacement_pct:   r2(leftDisp),
+          duration_s:         r2(elapsed),
+          fingers_extended:   countExtendedFingers(lms),
+          palm_facing_camera: isPalmFacing(lms),
         },
       };
     }
@@ -187,7 +207,7 @@ function updateSwipe(side, hs, lms, mpConf, now) {
 //
 // State: IDLE → FIST_DETECTED → PALM_OPENED → (proposal emitted) → IDLE
 //
-//   IDLE:          Wait for a closed fist (≤1 finger extended).
+//   IDLE:          Wait for a closed fist (≤2 fingers extended; thumb may stick out).
 //   FIST_DETECTED: Hold fist ≥FIST_HOLD_MS, then open hand to trigger next phase.
 //   PALM_OPENED:   Open palm held stable for ≥PALM_HOLD_MS → emit OPEN_MENU.
 //
@@ -198,23 +218,27 @@ function updatePalm(side, hs, lms, mpConf, now) {
   const span    = getHandSpan(lms);
   const wX      = lms[LM_WRIST].x;
   const isOpen  = fingers >= 4 && facing;
-  const isFist  = fingers <= 1;
+  // Loosened fist threshold: ≤2 fingers extended allows thumb to stick out,
+  // which MediaPipe frequently misclassifies on a closed fist.
+  const isFist  = fingers <= 2;
 
   if (p.state === "IDLE") {
     if (isFist) {
       p.fistStartTs = now;
       p.state       = "FIST_DETECTED";
+      console.log(`[OPEN_MENU] state: FIST_DETECTED, fingersExtended: ${fingers}, fistDuration: 0ms`);
     }
     return null;
   }
 
   if (p.state === "FIST_DETECTED") {
-    const fistElapsed = (now - p.fistStartTs) / 1000;
+    const fistDurMs = Math.round(now - p.fistStartTs);
+    console.log(`[OPEN_MENU] state: ${p.state}, fingersExtended: ${fingers}, fistDuration: ${fistDurMs}ms`);
     if (isFist) {
       // Still holding fist — keep waiting
       return null;
     }
-    if (isOpen && fistElapsed >= FIST_HOLD_MS / 1000) {
+    if (isOpen && fistDurMs >= FIST_HOLD_MS) {
       // Fist was held long enough, and the hand just opened → start palm phase
       p.palmStartTs = now;
       p.startWX     = wX;
@@ -235,6 +259,7 @@ function updatePalm(side, hs, lms, mpConf, now) {
     p.openCount++;
     const elapsed    = (now - p.palmStartTs) / 1000;
     const wristDelta = Math.abs(wX - p.startWX);
+    console.log(`[OPEN_MENU] state: ${p.state}, fingersExtended: ${fingers}, palmDuration: ${Math.round(elapsed * 1000)}ms`);
 
     if (wristDelta > PALM_STABILITY) {
       // Wrist drifted — not a stable hold
@@ -264,34 +289,53 @@ function updatePalm(side, hs, lms, mpConf, now) {
 
 // ─── Palm-to-fist (CLOSE_MENU) ────────────────────────────────────────────────
 //
-// Open palm held for ≥3 frames, then hand closes to fist (≤1 finger) within
-// 0.3–0.8s of the OPEN_SEEN transition.
-// State: IDLE → OPEN_SEEN → (proposal emitted) → IDLE
+// Deliberate palm-to-fist only: incidental hand withdrawal or reaching should
+// not trigger. Requirements:
+//   1. Open palm (≥4 fingers) seen for ≥REQUIRED_FRAMES in IDLE.
+//   2. Palm held still (wrist drift < CLOSE_PALM_MAX_DRIFT) for ≥CLOSE_MIN_MS.
+//   3. Hand closes to fist (≤2 fingers) while still in frame.
+//   4. Fist held for ≥CLOSE_FIST_HOLD_MS before firing.
+//
+// State: IDLE → OPEN_SEEN → FIST_SEEN → (proposal emitted) → IDLE
 //
 function updateClose(side, hs, lms, mpConf, now) {
   const c       = hs.close;
   const fingers = countExtendedFingers(lms);
   const facing  = isPalmFacing(lms);
   const span    = getHandSpan(lms);
+  const wX      = lms[LM_WRIST].x;
   const isOpen  = fingers >= 4 && facing;
-  const isFist  = fingers <= 1;
+  const isFist  = fingers <= 2;
 
   if (c.state === "IDLE") {
     if (isOpen) {
       c.openCount++;
       if (c.openCount >= REQUIRED_FRAMES) {
         c.startTs     = now;
+        c.palmStartWX = wX;
         c.openFingers = fingers;
         c.state       = "OPEN_SEEN";
       }
     } else {
-      c.openCount = 0;  // reset if open palm breaks before 3 frames
+      c.openCount = 0;
     }
     return null;
   }
 
   if (c.state === "OPEN_SEEN") {
-    const elapsed = (now - c.startTs) / 1000;
+    const elapsed       = (now - c.startTs) / 1000;
+    const wristMovement = Math.abs(wX - c.palmStartWX);
+    console.log(
+      `[CLOSE_MENU] state: OPEN_SEEN, palmDur: ${Math.round(elapsed * 1000)}ms,` +
+      ` wristMovement: ${wristMovement.toFixed(3)}, fingersExtended: ${fingers}`,
+    );
+
+    // Stillness check: hand must not be moving laterally (catches reaching / phone withdrawal)
+    if (wristMovement > CLOSE_PALM_MAX_DRIFT) {
+      c.state     = "IDLE";
+      c.openCount = 0;
+      return null;
+    }
 
     if (elapsed > CLOSE_MAX_MS / 1000) {
       c.state     = "IDLE";
@@ -299,8 +343,44 @@ function updateClose(side, hs, lms, mpConf, now) {
       return null;
     }
 
+    if (isOpen) return null;  // still holding palm — keep waiting
+
+    // Hand is no longer open: must be a genuine fist after sufficient palm hold
     if (isFist && elapsed >= CLOSE_MIN_MS / 1000) {
-      const conf = closeConfidence(mpConf, c.openFingers, fingers, elapsed, span);
+      c.fistStartTs = now;
+      c.state       = "FIST_SEEN";
+      return null;
+    }
+
+    // Ambiguous pose or palm ended too soon → reset
+    c.state     = "IDLE";
+    c.openCount = 0;
+    return null;
+  }
+
+  if (c.state === "FIST_SEEN") {
+    const fistElapsed = (now - c.fistStartTs) / 1000;
+    const palmElapsed = (now - c.startTs) / 1000;
+    console.log(
+      `[CLOSE_MENU] state: FIST_SEEN, fistDur: ${Math.round(fistElapsed * 1000)}ms,` +
+      ` fingersExtended: ${fingers}`,
+    );
+
+    if (!isFist) {
+      // Fist broke before hold completed — not a deliberate close
+      c.state     = "IDLE";
+      c.openCount = 0;
+      return null;
+    }
+
+    if (palmElapsed > CLOSE_MAX_MS / 1000 + CLOSE_FIST_HOLD_MS / 1000) {
+      c.state     = "IDLE";
+      c.openCount = 0;
+      return null;
+    }
+
+    if (fistElapsed >= CLOSE_FIST_HOLD_MS / 1000) {
+      const conf = closeConfidence(mpConf, c.openFingers, fingers, palmElapsed, span);
       c.state     = "IDLE";
       c.openCount = 0;
       return {
@@ -310,7 +390,7 @@ function updateClose(side, hs, lms, mpConf, now) {
           handedness:         side,
           wrist_trajectory_x: [],
           displacement_pct:   0,
-          duration_s:         r2(elapsed),
+          duration_s:         r2(palmElapsed),
           fingers_extended:   fingers,
           palm_facing_camera: facing,
         },
@@ -445,7 +525,7 @@ export function proposeGestureFromLandmarks(results) {
     // Mutual exclusion (Bug 3): while CLOSE_MENU is tracking its open-palm phase
     // (OPEN_SEEN), OPEN_MENU must not fire — the same palm would double-trigger.
     // Reset the palm state machine and skip it for this frame so CLOSE_MENU wins.
-    const closeIsTracking = hs.close.state === "OPEN_SEEN";
+    const closeIsTracking = hs.close.state === "OPEN_SEEN" || hs.close.state === "FIST_SEEN";
     if (closeIsTracking) {
       hs.palm.state       = "IDLE";
       hs.palm.fistStartTs = null;
