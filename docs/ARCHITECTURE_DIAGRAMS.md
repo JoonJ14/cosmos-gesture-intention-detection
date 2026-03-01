@@ -163,39 +163,59 @@ Call /verify                 Call /execute
 
 Same layout as either mode above, but verifier uses `stub_logic.py` (always approve or force-reject) instead of calling Cosmos NIM. No DGX Spark required.
 
-## Option 2: Teacher-Student Loop (placeholder — to be filled when implemented)
+## Option 2: Teacher-Student Loop
 
 ```text
-┌─────────────────── Runtime Loop ───────────────────────┐
-│                                                         │
-│  Gesture Detected → Local Confidence (student model)    │
-│       │                                                 │
-│       ├── HIGH → Execute directly                       │
-│       │                                                 │
-│       ├── MEDIUM → Cosmos Verifier (teacher) ──┐       │
-│       │       │                                 │       │
-│       │       ├── Approved → Execute            │       │
-│       │       └── Rejected → Block              │       │
-│       │                                         │       │
-│       └── LOW → Ignore                          │       │
-│                                                 │       │
-│  All events logged to JSONL ◄───────────────────┘       │
-│                                                         │
-└───────────────────────┬─────────────────────────────────┘
-                        │
-                        v
-┌─────────────── Periodic Training ──────────────────────┐
-│                                                         │
-│  1. Extract features + Cosmos labels from JSONL         │
-│  2. Train lightweight student classifier                │
-│  3. Evaluate on frozen calibration set                  │
-│  4. If improved AND no regression → deploy new student  │
-│  5. Student provides better confidence scores           │
-│  6. Fewer cases fall in MEDIUM band                     │
-│  7. Fewer Cosmos calls needed over time                 │
-│                                                         │
-│  Cosmos teaches → Student learns → System improves      │
-│  Cosmos is never fine-tuned — only the student trains   │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────── Per-Gesture-Proposal Flow ─────────────────────────┐
+│                                                                              │
+│  Loose State Machine                                                         │
+│  (high recall, low precision)                                                │
+│         │                                                                    │
+│         │ gesture proposal                                                   │
+│         v                                                                    │
+│  Student Classifier ──────────────────────────────────────────┐             │
+│  (<1ms, landmark features)                                     │             │
+│         │                                                      │             │
+│         ├── EXECUTE → Action fires immediately                 │             │
+│         │                                                      │             │
+│         └── SUPPRESS → Action blocked                         │             │
+│                                                                │             │
+│  Evidence frames (8-frame ring buffer window)                  │             │
+│         │                                                      │             │
+│         │ ALWAYS sent async (100% in Phase 1)                  │             │
+│         v                                                      │             │
+│  Cosmos Reason 2 ─── label returns 5-8s later ──────────────► │             │
+│  (teacher — never gates actions)                               │             │
+│                                                                │             │
+│  JSONL log: landmark features + student prediction +           │             │
+│             Cosmos label + execution outcome ◄─────────────────┘             │
+│                                                                              │
+└─────────────────────────────┬────────────────────────────────────────────────┘
+                              │
+                              v
+┌──────────────────────── Periodic Retraining ───────────────────────────────┐
+│                                                                              │
+│  1. Extract feature vectors + Cosmos labels from JSONL                      │
+│  2. Filter: Cosmos confidence >= 0.75, discard reason_category: unknown     │
+│  3. Train student classifier (logistic regression / random forest)          │
+│  4. Evaluate on frozen calibration set (20+ pos + 20+ hard negatives)       │
+│  5. If improved AND no regression (< 2% drop per category) → deploy         │
+│  6. If regression detected → reject update, keep current student            │
+│                                                                              │
+└─────────────────────────────┬────────────────────────────────────────────────┘
+                              │
+                              v
+┌──────────────────────── Phased Cosmos Dependency ──────────────────────────┐
+│                                                                              │
+│  Phase 1 (launch):   100% of proposals sent to Cosmos                       │
+│  Phase 2 (>90% agreement over 100 proposals): random 50% sent               │
+│  Phase 3 (>95% agreement): random 10-20% sent (spot-check only)             │
+│                                                                              │
+│  Sampling is always RANDOM — never confidence-based (avoids blind spots)    │
+│  Never reduce to 0% — always maintain a correction signal                   │
+│                                                                              │
+│  Cosmos teaches → Student learns → System improves                           │
+│  Cosmos is never fine-tuned — only the student trains                        │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
