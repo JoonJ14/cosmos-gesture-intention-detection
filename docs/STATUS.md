@@ -10,13 +10,13 @@
 
 ## Session handoff note
 
-**Last updated**: 2026-03-01 early morning session.
+**Last updated**: 2026-03-01 (second session).
 
-**Current state**: All three services run. Gesture detection has been heavily iterated — CSS selfie mirror added, swipe redesigned as pose-agnostic, OPEN_MENU requires fist→palm transition, CLOSE_MENU is a 3-state machine with stillness check, mutual exclusion / priority logic implemented, startup latency reduced. Comprehensive debug logging is wired throughout. Thresholds are working but intentionally not yet maximally loose — the **next** step is to deliberately loosen them to drive high recall and feed Cosmos with more proposals.
+**Current state**: Option 2 teacher-student pipeline is fully built. All four services run. Gesture detection thresholds have been aggressively loosened for high recall. Swipe detection now uses Euclidean total displacement with a 40% lateral-component guard for direction. Feature extraction is wired into the web app. The student classifier service (Flask :8789, shadow mode by default) is live. Training script exists. The system is ready for data collection: run all four services, perform gestures + false-positive motions, and let Cosmos label events in the background. After 20+ labeled events accumulate, run `scripts/train_student.py` to train the student model.
 
 ---
 
-## What was done this session (2026-03-01)
+## What was done this session (2026-03-01, morning)
 
 All changes are in `web/src/gesture.js` and `web/src/index.html`.
 
@@ -65,78 +65,101 @@ Added `transform: scaleX(-1)` to both `#video` and `#overlay` in `index.html`. U
 
 ---
 
-## Current threshold values (post-session, before next loosening pass)
+## What was done post-morning (2026-03-01, second session)
+
+### Threshold loosening for high recall (commit f64e3ac)
+Aggressively loosened all state machine thresholds. Fist threshold relaxed from ≤2 to ≤3 fingers, palm from ≥4 to ≥3. CLOSE_MENU stillness check (CLOSE_PALM_MAX_DRIFT) removed entirely — moving hands now allowed through; Cosmos handles false positives. Swipe window widened. Cooldown halved.
+
+### Option 2 teacher-student pipeline (commit 8634f9f)
+Full pipeline built across 11 files:
+- **Feature extraction** in `gesture.js`: `extractFeatures()` computes 12 numeric features (swipeDisplacement, swipeDuration, peakVelocity, fingersExtended, handSide, handSpan, wristX, wristY, palmFacing, wristVelocityX, wristVelocityY, stateConfidence) + one-hot gestureType. `recentWristPositions` 10-entry sliding window added for velocity features.
+- **Student service** `student/service.py`: Flask on :8789. Shadow mode (always execute=true, predictions logged only) by default. Active mode (`STUDENT_MODE=active`) gates on model prediction. Hot-reloads model when file mtime changes. Endpoints: `/predict`, `/status`, `/health`.
+- **Training script** `scripts/train_student.py`: reads all `verifier_events.jsonl`, filters Cosmos confidence ≥0.75 and `reason_category ≠ unknown`, requires ≥20 samples. Trains LR + RF, picks better test accuracy. Regression guard: rejects update if calibration accuracy drops >2%. Saves `models/student/current_model.joblib` + versioned backups + `training_log.json`.
+- **Web app integration** (`api.js`, `main.js`, `index.html`): Student URL input (default `localhost:8789`), student status div, `callStudent()` with 500 ms timeout, student prediction logged with every event, active-mode suppression path (`student_suppressed`), graceful fallback when service unavailable.
+- **JSONL logging extensions**: executor and verifier both accept and log optional `features` + `student_prediction` fields, enabling event correlation by event_id.
+- **Supporting files**: `student/requirements.txt`, `scripts/run_student.sh`, `models/student/.gitkeep`.
+
+### Diagonal swipe broadening (commit e663492)
+`updateSwipe` switched from x-only displacement to Euclidean total `sqrt(dx²+dy²)`. Direction still determined by x-component sign. Added `|dx|/total ≥ 0.40` lateral guard to reject purely vertical motions. Lowered `SWIPE_MIN_DISPLACEMENT` to 0.07 and `SWIPE_MIN_DURATION` to 0.05 to capture fast snap swipes and arc motions.
+
+---
+
+## Current threshold values (after all loosening)
 
 ```
-REQUIRED_FRAMES:        1        (was 3)
-MIN_HAND_SPAN:          0.025    (was 0.05)
-FIST_HOLD_MS:           100
-PALM_HOLD_MS:           300
+REQUIRED_FRAMES:        1
+MIN_HAND_SPAN:          0.015    (was 0.025)
+FIST_HOLD_MS:           50       (was 100)
+PALM_HOLD_MS:           150      (was 300)
 PALM_STABILITY:         0.05
-CLOSE_MIN_MS:           300
+CLOSE_MIN_MS:           150      (was 300)
 CLOSE_MAX_MS:           1000
-CLOSE_FIST_HOLD_MS:     150
-CLOSE_PALM_MAX_DRIFT:   0.06
-SWIPE_MIN_DISPLACEMENT: 0.15
-SWIPE_MIN_DURATION:     0.20
-SWIPE_MAX_DURATION:     1.5
-COOLDOWN_MS:            1500
-Fist threshold:         ≤2 fingers extended
-Palm threshold:         ≥4 fingers extended AND palm facing camera
+CLOSE_FIST_HOLD_MS:     75       (was 150)
+CLOSE_PALM_MAX_DRIFT:   removed  (was 0.06)
+SWIPE_MIN_DISPLACEMENT: 0.07     (Euclidean total; was 0.15 x-only)
+SWIPE_MIN_DURATION:     0.05     (was 0.20)
+SWIPE_MAX_DURATION:     2.0      (was 1.5)
+COOLDOWN_MS:            800      (was 1500)
+Fist threshold:         ≤3 fingers extended  (was ≤2)
+Palm threshold:         ≥3 fingers extended AND palm facing camera  (was ≥4)
+Swipe direction guard:  |dx|/total ≥ 0.40  (new — rejects purely vertical motions)
 ```
 
 ---
 
 ## What needs to happen next (in priority order)
 
-### 1. IMMEDIATE: Loosen state machine for high recall
+### 1. IMMEDIATE: Verify DGX Spark Cosmos is still running
+SSH to 192.168.1.250, check tmux session "cosmos", ensure vLLM is running on :8000 and verifier on :8788.
 
-**Strategic decision**: intentionally make the state machine trigger-happy (high recall, low precision). This is necessary to justify Cosmos's role as the precision/filtering layer. A tight state machine that rarely fires leaves Cosmos with nothing to do.
-
-Target threshold changes:
-```
-FIST_HOLD_MS:           100  →  50
-PALM_HOLD_MS:           300  →  150
-CLOSE_MIN_MS:           300  →  150
-CLOSE_FIST_HOLD_MS:     150  →  75
-SWIPE_MIN_DISPLACEMENT: 0.15 →  0.10
-SWIPE_MIN_DURATION:     0.20 →  0.15
-SWIPE_MAX_DURATION:     1.5  →  2.0
-MIN_HAND_SPAN:          0.025 → 0.015
-COOLDOWN_MS:            1500 →  800
-Fist detection:         ≤2   →  ≤3 fingers
-Palm detection:         ≥4   →  ≥3 fingers
-Remove CLOSE_MENU stillness check (CLOSE_PALM_MAX_DRIFT) entirely
+```bash
+ssh user@192.168.1.250
+tmux attach -t cosmos   # or: tmux ls
+curl -s http://localhost:8000/health
+curl -s http://localhost:8788/health
 ```
 
-A prompt for this may be in `loosen-state-machine.md` in downloads or `/mnt/user-data/outputs/`.
+### 2. E2E test all four services together
+Run all four services, open the web app, and verify the full pipeline:
 
-### 2. Build Option 2 teacher-student pipeline (CRITICAL PATH)
+```bash
+# Four terminals from repo root:
+./scripts/run_executor.sh            # :8787
+NIM_ENABLED=1 COSMOS_NIM_URL=http://localhost:8000 ./scripts/run_verifier.sh   # :8788 (on DGX)
+./scripts/run_student.sh             # :8789
+./scripts/run_web.sh                 # :5173
 
-Option 2 is the core deliverable, not a stretch goal. Architecture:
-- Loose state machine fires proposals (high recall, low precision)
-- Lightweight local **student classifier** (scikit-learn logistic regression or small random forest) decides execute/suppress in real time using features extracted from MediaPipe landmarks (trajectory, finger extension history, wrist velocity, hand size/position)
-- Evidence frames go to Cosmos async at 100% send rate during Phase 1
-- Cosmos returns intent label, logged as training data in JSONL
-- Student periodically retrains on accumulated Cosmos labels
-- **Phase 1**: 100% to Cosmos. **Phase 2**: ≥90% agreement → ~50% random sampling. **Phase 3**: ≥95% → 10–20% spot-check
-- Always send some % to Cosmos (never 0%) to prevent teacher bias propagation and student blind spots
+# Connect from Mac:
+http://localhost:5173/?verifier=http://192.168.1.250:8788&student=http://localhost:8789
+```
 
-See `docs/OPTION2_RISKS_AND_MITIGATIONS.md` for full design, failure modes, and safeguards.
+Check browser console: `[GESTURE FRAME]`, `[SWIPE]`, `[STUDENT]`, `[VERIFY]` logs should all fire.
 
-### 3. Record eval clips and run Cosmos metrics
+### 3. Accumulate labeled events for student training
+Perform gestures and deliberate false-positive motions (reaching, head scratch, conversational wave, phone withdrawal) while all four services are running. Need 20+ labeled events with Cosmos confidence ≥0.75 in `verifier_events.jsonl`.
+
+### 4. Train first student model
+```bash
+python scripts/train_student.py
+```
+Review accuracy. If acceptable, restart student service (it will hot-reload from `models/student/current_model.joblib`). Switch to active mode to test live suppression:
+```bash
+STUDENT_MODE=active ./scripts/run_student.sh
+```
+
+### 5. Record eval clips and run Cosmos metrics
 - 20+ positives per gesture (80+ total)
 - 20+ hard negatives (head scratch, reaching, conversational wave, putting phone away)
 - Run through Cosmos, produce precision/recall table
 - Quantitative evidence for the submission
 
-### 4. Demo video (under 3 minutes)
+### 6. Demo video (under 3 minutes)
 - Show the problem: loose state machine firing on everything (false positives everywhere)
 - Show the solution: Cosmos filtering + student model learning
 - Show the metrics: precision/recall improvement
 - Show the architecture: teacher-student loop
 
-### 5. Low priority — UI overlay polish
+### 7. Low priority — UI overlay polish
 - Show gesture state, confidence, Cosmos result in overlay
 - Nice to have for the demo, not essential
 
@@ -144,18 +167,24 @@ See `docs/OPTION2_RISKS_AND_MITIGATIONS.md` for full design, failure modes, and 
 
 ## Architecture summary
 
-**Three services:**
-- Web app (JS, :5173): MediaPipe Hands + gesture state machines + ring buffer + evidence capture
+**Four services:**
+- Web app (JS, :5173): MediaPipe Hands + gesture state machines + ring buffer + evidence capture + feature extraction
 - Executor (Python, :8787): OS key injection (xdotool on Linux, osascript on Mac)
-- Verifier (Python, :8788): Calls Cosmos Reason 2 via vLLM on DGX Spark
+- Verifier (Python, :8788): Calls Cosmos Reason 2 via vLLM on DGX Spark — async teacher/labeler
+- Student (Python, :8789): Real-time execute/suppress classifier (scikit-learn, shadow mode by default)
 
 **Hardware:**
 - DGX Spark (GB10, 128 GB, Ubuntu arm64) at 192.168.1.250 — Cosmos Reason 2 via vLLM on port 8000, verifier on port 8788 in tmux session "cosmos"
-- MacBook Air (Apple Silicon) — development; web app + executor run locally, connects to remote verifier
+- MacBook Air (Apple Silicon) — development; web app + executor + student run locally, connects to remote verifier
 
-**Connection from Mac:** `http://localhost:5173/?verifier=http://192.168.1.250:8788`
+**Connection from Mac:** `http://localhost:5173/?verifier=http://192.168.1.250:8788&student=http://localhost:8789`
 
-**Cosmos latency:** 5.8–8.4 s per call. Too slow for live gating. Architecture shifted to async verification, then to teacher-student loop (Option 2).
+**Cosmos latency:** 5.8–8.4 s per call. Too slow for live gating. Architecture: async verification is the teacher (labels training data); student classifier is the real-time gatekeeper.
+
+**Teacher-student phases:**
+- Phase 1: 100% of proposals sent to Cosmos (blind spot detection)
+- Phase 2: ≥90% agreement → ~50% random sampling to Cosmos
+- Phase 3: ≥95% agreement → 10–20% spot-check to Cosmos (never 0%)
 
 ---
 
@@ -183,6 +212,10 @@ See `docs/OPTION2_RISKS_AND_MITIGATIONS.md` for full design, failure modes, and 
 aca5c9c fix: swap swipe L/R, add debug tracing for open/close menu
 3279fc2 fix: mirror display, swipe redesign (pose-agnostic + direction), loosen fist detection, tighten close_menu
 e0c4148 fix: gesture detection bugs — mirror flip, fist->palm transition, mutual exclusion, threshold tuning
+e152e22 docs: rewrite Option 2 design doc with teacher-student architecture
+f64e3ac tune: aggressively loosen state machine thresholds for high recall — Cosmos handles precision
+8634f9f feat: Option 2 teacher-student pipeline — feature extraction, student service, training script
+e663492 fix: swipe uses total displacement for diagonal arcs, lower min duration for fast swipes
 ```
 
 ---
@@ -212,22 +245,35 @@ e0c4148 fix: gesture detection bugs — mirror flip, fist->palm transition, mutu
 
 ### Done — gesture detection and evidence pipeline
 - [x] CSS selfie mirror — `#video` and `#overlay` both `transform: scaleX(-1)`
-- [x] Swipe detection — pose-agnostic, either hand, mirror-correct direction mapping
+- [x] Swipe detection — pose-agnostic, either hand, Euclidean total displacement, 40% lateral guard
 - [x] OPEN_MENU — fist→palm 3-state machine (IDLE → FIST_DETECTED → PALM_OPENED)
-- [x] CLOSE_MENU — 3-state machine (IDLE → OPEN_SEEN → FIST_SEEN) with stillness check
+- [x] CLOSE_MENU — 3-state machine (IDLE → OPEN_SEEN → FIST_SEEN), stillness check removed
 - [x] Mutual exclusion — OPEN_MENU priority when mid-sequence; CLOSE_MENU suppresses OPEN_MENU only when it is still IDLE
-- [x] Global 1.5 s cooldown after any gesture fires
+- [x] Global 800 ms cooldown after any gesture fires
 - [x] Real local_confidence — swipe: mpConf×0.30 + dispMargin×0.40 + temporal×0.15 + size×0.15
 - [x] Frame ring buffer — 30-frame circular buffer, exports 8-frame evidence windows as base64 JPEGs
 - [x] Async verification pipeline — fire-and-forget background verify; logs cosmos_disagrees
 - [x] Comprehensive debug logging — [GESTURE FRAME], [SWIPE], [OPEN_MENU], [CLOSE_MENU], [COOLDOWN]
+- [x] Thresholds aggressively loosened for high recall (commit f64e3ac)
+
+### Done — Option 2 teacher-student pipeline
+- [x] `extractFeatures()` in gesture.js — 12 numeric features + one-hot gestureType
+- [x] `recentWristPositions` sliding window (10 entries) for velocity features
+- [x] Student service (`student/service.py`) — Flask :8789, shadow/active modes, hot-reload
+- [x] Training script (`scripts/train_student.py`) — LR + RF, regression guard, versioned saves
+- [x] Launch script (`scripts/run_student.sh`) — venv setup + STUDENT_MODE env var
+- [x] Web app integration — student URL input, callStudent() with 500 ms timeout, graceful fallback
+- [x] `student_suppressed` policy path — active mode gates on student prediction
+- [x] JSONL logging extensions — features + student_prediction in executor and verifier logs
+- [x] Diagonal swipe broadening — Euclidean displacement, |dx|/total ≥ 0.40, SWIPE_MIN_DURATION 0.05
 
 ### In progress / next
-- [ ] **Loosen thresholds** for high-recall mode (see target values above)
-- [ ] **Option 2 teacher-student pipeline** — student classifier, JSONL training loop, Cosmos sampling phases
+- [ ] **Verify DGX Spark** — confirm Cosmos + verifier still running
+- [ ] **E2E test** all four services together with real Cosmos
+- [ ] **Accumulate 20+ labeled events** via gesture + false-positive session
+- [ ] **Train first student model** and evaluate
 - [ ] **Evaluation harness** — 80+ positives + 20+ hard negatives, metrics table
 - [ ] **Demo video** — under 3 minutes
-- [ ] Three-tier confidence routing: HIGH ≥0.85 direct, MEDIUM → async verify, LOW → ignore
 - [ ] UI overlay: gesture state, confidence, Cosmos result live
 - [ ] Final README polish
 
@@ -237,16 +283,22 @@ e0c4148 fix: gesture detection bugs — mirror flip, fist->palm transition, mutu
 
 | File | Role | Status |
 |------|------|--------|
-| `web/src/gesture.js` | MediaPipe setup + 4 gesture state machines | **Active — iterated heavily this session** |
-| `web/src/index.html` | HTML + CSS including selfie mirror | **Updated this session** |
+| `web/src/gesture.js` | MediaPipe setup + 4 gesture state machines + feature extraction | **Updated — all thresholds loosened, diagonal swipe, extractFeatures()** |
+| `web/src/index.html` | HTML + CSS including selfie mirror, student URL input | **Updated** |
+| `web/src/main.js` | Event state machine, async verify, student integration | **Updated — student call, student_suppressed path** |
+| `web/src/api.js` | HTTP client for verifier, executor, student | **Updated — callStudent()** |
 | `web/src/ringbuffer.js` | 30-frame circular buffer, getEvidenceWindow(n) | Done |
-| `web/src/main.js` | Event state machine, async verify, ring buffer wiring | Done |
-| `web/src/api.js` | HTTP client for verifier and executor | Done |
 | `web/src/overlay.js` | Canvas hand landmark drawing | Done |
+| `student/service.py` | Flask :8789, shadow/active modes, hot-reload | **New** |
+| `student/requirements.txt` | Flask, joblib, scikit-learn, numpy | **New** |
+| `scripts/train_student.py` | Train LR+RF on Cosmos-labeled JSONL, regression guard | **New** |
+| `scripts/run_student.sh` | Launch student service with venv | **New** |
 | `verifier/verifier/nim_logic.py` | Real Cosmos NIM call via vLLM | Done |
-| `executor/executor/main.py` | FastAPI /execute, xdotool/osascript, JSONL log | Done |
+| `verifier/verifier/main.py` | FastAPI /verify, JSONL log with features + student_prediction | **Updated** |
+| `executor/executor/main.py` | FastAPI /execute, xdotool/osascript, JSONL log | **Updated** |
 | `shared/schema.json` | Strict verifier response schema | Done |
 | `data/cosmos_latency_tests.md` | Latency measurements + discrimination test results | Done |
+| `docs/OPTION2_RISKS_AND_MITIGATIONS.md` | Teacher-student loop design, failure modes, safeguards | **Rewritten** |
 
 ---
 
@@ -260,7 +312,7 @@ e0c4148 fix: gesture detection bugs — mirror flip, fist->palm transition, mutu
 | `docs/COSMOS_PROMPT_AND_SCHEMA.md` | Cosmos prompt template, schema, API call construction |
 | `docs/LATENCY_AND_AMBIGUOUS_POLICY.md` | Measured latency, async vs safe-mode policy, merge/supersede rules |
 | `docs/OPTION2_RISKS_AND_MITIGATIONS.md` | Teacher-student loop design, failure modes, safeguards |
-| `docs/ARCHITECTURE_DIAGRAMS.md` | ASCII diagrams for all system flows |
+| `docs/ARCHITECTURE_DIAGRAMS.md` | ASCII diagrams for all system flows including teacher-student loop |
 | `docs/STATUS.md` | This file |
 | `data/cosmos_latency_tests.md` | Cosmos latency measurements and discrimination test results |
 
@@ -269,19 +321,20 @@ e0c4148 fix: gesture detection bugs — mirror flip, fist->palm transition, mutu
 ## Quick start
 
 ```bash
-# Three terminals from repo root:
-./scripts/run_executor.sh   # :8787
-./scripts/run_verifier.sh   # :8788  (NIM_ENABLED=0 → stub 19 ms)
-./scripts/run_web.sh        # :5173
+# Four terminals from repo root (Mac):
+./scripts/run_executor.sh            # :8787
+./scripts/run_student.sh             # :8789  (shadow mode by default)
+./scripts/run_web.sh                 # :5173
 
-# With real Cosmos (vLLM must be running at localhost:8000):
-NIM_ENABLED=1 COSMOS_NIM_URL=http://localhost:8000 ./scripts/run_verifier.sh
+# On DGX Spark (192.168.1.250):
+NIM_ENABLED=1 COSMOS_NIM_URL=http://localhost:8000 ./scripts/run_verifier.sh   # :8788
 ```
 
 Test keys: `1` OPEN_MENU, `2` CLOSE_MENU, `3` SWITCH_RIGHT, `4` SWITCH_LEFT
 
 ```bash
 curl -s http://127.0.0.1:8787/health
-curl -s http://127.0.0.1:8788/health
-curl -s http://127.0.0.1:8000/health   # vLLM
+curl -s http://127.0.0.1:8788/health   # verifier (on DGX)
+curl -s http://127.0.0.1:8789/health   # student
+curl -s http://127.0.0.1:8000/health   # vLLM (on DGX)
 ```
