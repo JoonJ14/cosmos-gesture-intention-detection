@@ -10,13 +10,16 @@ import {
 import { drawHandsOverlay, syncOverlaySize } from "./overlay.js";
 import { getEvidenceWindow, pushFrame } from "./ringbuffer.js";
 import {
+  advanceRecordingState,
   autoCapture,
+  discardPendingClip,
+  getRecordingElapsedMs,
+  getPendingFrames,
+  getRecordingState,
   getStats,
-  hasPendingClip,
   isAutoCapture,
   isRecordingEnabled,
   labelPendingClip,
-  manualCapture,
   notifyGesture,
   saveSession,
   setOnStateChange,
@@ -47,6 +50,47 @@ studentUrlInput.addEventListener("change", (e) => {
 
 function updateStudentStatus(message) {
   studentStatusElement.textContent = `Student: ${message}`;
+}
+
+// ─── Recording timer and preview intervals ────────────────────────────────────
+
+let _timerInterval   = null;  // updates the RECORDING timer text every 100 ms
+let _previewInterval = null;  // cycles through clip frames at ~10 fps
+let _previewIdx      = 0;     // current frame index in the preview loop
+
+function _startTimer() {
+  if (_timerInterval) return;
+  _timerInterval = setInterval(() => {
+    const el = document.getElementById("recOverlayText");
+    if (el) {
+      const secs = (getRecordingElapsedMs() / 1000).toFixed(1);
+      el.textContent = `RECORDING ${secs}s`;
+    }
+  }, 100);
+}
+
+function _stopTimer() {
+  if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+}
+
+function _startPreview(frames) {
+  _stopPreview();
+  if (!frames || frames.length === 0) return;
+  _previewIdx = 0;
+  const img     = document.getElementById("clipPreviewImg");
+  const counter = document.getElementById("previewFrameCounter");
+  const show = () => {
+    img.src = `data:image/jpeg;base64,${frames[_previewIdx]}`;
+    counter.textContent = `Frame ${_previewIdx + 1} / ${frames.length}`;
+    _previewIdx = (_previewIdx + 1) % frames.length;
+  };
+  show();
+  _previewInterval = setInterval(show, 100); // 10 fps
+}
+
+function _stopPreview() {
+  if (_previewInterval) { clearInterval(_previewInterval); _previewInterval = null; }
+  _previewIdx = 0;
 }
 
 const EVENT_STATES = Object.freeze({
@@ -545,31 +589,80 @@ function handleIntentProposal(
 // ─── Recording UI ─────────────────────────────────────────────────────────────
 
 function updateRecordingUI() {
-  const recStatus      = document.getElementById("recStatus");
-  const autoCaptureBtn = document.getElementById("autoCaptureBtn");
-  const recCounter     = document.getElementById("recCounter");
-  const pendingNotice  = document.getElementById("pendingNotice");
+  const recState = getRecordingState();
+  const enabled  = isRecordingEnabled();
+  const stats    = getStats();
 
-  // Status indicator
-  if (!isRecordingEnabled()) {
+  // ── Status chip ─────────────────────────────────────────────────────────────
+  const recStatus = document.getElementById("recStatus");
+  if (!enabled) {
     recStatus.textContent = "IDLE";
     recStatus.className   = "idle";
-  } else if (hasPendingClip()) {
-    recStatus.textContent = "PENDING LABEL";
-    recStatus.className   = "pending";
   } else {
-    recStatus.textContent = "READY";
-    recStatus.className   = "ready";
+    const labels = { ready: "READY", recording: "RECORDING", captured: "CAPTURED" };
+    recStatus.textContent = labels[recState] ?? "READY";
+    recStatus.className   = recState;
   }
 
-  // Auto-capture button
+  // ── Capture button label ─────────────────────────────────────────────────────
+  const captureBtn = document.getElementById("captureBtn");
+  if (recState === "recording") {
+    captureBtn.textContent = "⏹ Capture [Space]";
+  } else {
+    captureBtn.textContent = "● Record [Space]";
+  }
+  captureBtn.disabled = (recState === "captured");
+
+  // ── Auto-capture button ──────────────────────────────────────────────────────
+  const autoCaptureBtn = document.getElementById("autoCaptureBtn");
   autoCaptureBtn.textContent = `Auto-capture: ${isAutoCapture() ? "ON" : "OFF"}`;
   autoCaptureBtn.classList.toggle("active", isAutoCapture());
 
-  // Counter and pending notice
-  const stats = getStats();
-  recCounter.textContent = `${stats.total} clip${stats.total !== 1 ? "s" : ""}`;
-  pendingNotice.style.display = stats.pending ? "block" : "none";
+  // ── Counter ──────────────────────────────────────────────────────────────────
+  document.getElementById("recCounter").textContent =
+    `${stats.total} clip${stats.total !== 1 ? "s" : ""}`;
+
+  // ── Label buttons — only active in CAPTURED state ────────────────────────────
+  document.querySelectorAll(".label-btn").forEach((btn) => {
+    btn.disabled = !(enabled && recState === "captured");
+  });
+
+  // ── Video overlay ────────────────────────────────────────────────────────────
+  const recOverlay  = document.getElementById("recOverlay");
+  const recDot      = document.getElementById("recDot");
+  const overlayText = document.getElementById("recOverlayText");
+
+  if (!enabled || recState === "captured") {
+    recOverlay.style.display = "none";
+    _stopTimer();
+  } else if (recState === "ready") {
+    recOverlay.style.display = "flex";
+    recDot.className         = "rec-dot";
+    overlayText.textContent  = "Press Space to Record";
+    _stopTimer();
+  } else if (recState === "recording") {
+    recOverlay.style.display = "flex";
+    recDot.className         = "rec-dot recording";
+    overlayText.textContent  = `RECORDING 0.0s`;
+    _startTimer();
+  }
+
+  // ── Pending notice and clip preview ─────────────────────────────────────────
+  const pendingNotice   = document.getElementById("pendingNotice");
+  const clipPreviewArea = document.getElementById("clipPreviewArea");
+
+  if (enabled && recState === "captured") {
+    pendingNotice.style.display   = "block";
+    clipPreviewArea.style.display = "flex";
+    // Start preview only if not already running (avoid resetting on every gesture)
+    if (!_previewInterval) {
+      _startPreview(getPendingFrames());
+    }
+  } else {
+    pendingNotice.style.display   = "none";
+    clipPreviewArea.style.display = "none";
+    _stopPreview();
+  }
 }
 
 // ─── Keyboard handler ─────────────────────────────────────────────────────────
@@ -603,10 +696,10 @@ function installKeyboardHandler() {
       return;
     }
 
-    // Space — manual capture (only when recording panel is open)
+    // Space — advance recording state machine (only when recording panel is open)
     if (e.key === " " && isRecordingEnabled()) {
       e.preventDefault();
-      manualCapture(() => getEvidenceWindow(8));
+      advanceRecordingState(() => getEvidenceWindow(8));
       updateRecordingUI();
     }
   });
@@ -619,7 +712,12 @@ async function bootstrap() {
   setOnStateChange(updateRecordingUI);
 
   document.getElementById("captureBtn").addEventListener("click", () => {
-    manualCapture(() => getEvidenceWindow(8));
+    advanceRecordingState(() => getEvidenceWindow(8));
+    updateRecordingUI();
+  });
+
+  document.getElementById("discardBtn").addEventListener("click", () => {
+    discardPendingClip();
     updateRecordingUI();
   });
 
