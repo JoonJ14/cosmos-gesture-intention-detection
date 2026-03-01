@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clip Review</title>
+  <style>
+    :root {
+      --bg:     #0f172a;
+      --card:   #111827;
+      --border: #334155;
+      --fg:     #e5e7eb;
+      --muted:  #94a3b8;
+      --accent: #22c55e;
+      --amber:  #f59e0b;
+      --red:    #ef4444;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      font-size: 13px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ──────────────────────────────────────────────────────────── */
+
+    header {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-shrink: 0;
+      background: var(--card);
+    }
+
+    header h1 {
+      font-size: 15px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    #fileInfo {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* ── Drop zone (shown before a file is loaded) ────────────────────────── */
+
+    #dropZone {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      margin: 24px;
+      color: var(--muted);
+      font-size: 15px;
+      transition: border-color 0.15s, color 0.15s;
+      cursor: default;
+    }
+
+    #dropZone.over {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    #dropZone .icon { font-size: 40px; }
+
+    #fileInput { display: none; }
+
+    #browseBtn {
+      background: #1e293b;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--fg);
+      cursor: pointer;
+      font-size: 13px;
+      padding: 6px 14px;
+    }
+    #browseBtn:hover { background: #334155; }
+
+    /* ── Main layout (shown after file loaded) ────────────────────────────── */
+
+    #main {
+      flex: 1;
+      display: none;
+      overflow: hidden;
+    }
+
+    #main.visible {
+      display: flex;
+    }
+
+    /* ── Clip list (left) ─────────────────────────────────────────────────── */
+
+    #clipList {
+      width: 300px;
+      flex-shrink: 0;
+      overflow-y: auto;
+      border-right: 1px solid var(--border);
+    }
+
+    .clip-item {
+      padding: 9px 12px;
+      border-bottom: 1px solid #1e293b;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .clip-item:hover   { background: #1e293b; }
+    .clip-item.active  { background: #1e3a5f; border-left: 3px solid var(--accent); }
+
+    .clip-item-id {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .clip-item-label {
+      font-weight: 600;
+      font-size: 12px;
+    }
+
+    .clip-item-label.tp  { color: var(--accent); }
+    .clip-item-label.neg { color: var(--amber); }
+    .clip-item-label.none { color: var(--muted); font-style: italic; }
+
+    .clip-item-meta {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    /* ── Player (right) ───────────────────────────────────────────────────── */
+
+    #player {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      gap: 16px;
+      overflow-y: auto;
+    }
+
+    #player.empty {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    #playerImg {
+      width: 480px;
+      max-width: 100%;
+      aspect-ratio: 16 / 9;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #020617;
+      object-fit: contain;
+      display: block;
+    }
+
+    #playerControls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    #frameCounter {
+      font-size: 12px;
+      color: var(--muted);
+      min-width: 80px;
+      text-align: center;
+    }
+
+    button.ctrl-btn {
+      background: #1e293b;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--fg);
+      cursor: pointer;
+      font-size: 12px;
+      padding: 4px 12px;
+    }
+    button.ctrl-btn:hover { background: #334155; }
+    button.ctrl-btn.active {
+      background: var(--accent);
+      color: #0f172a;
+      border-color: var(--accent);
+    }
+
+    #metaTable {
+      width: 480px;
+      max-width: 100%;
+      border-collapse: collapse;
+    }
+
+    #metaTable td {
+      padding: 4px 8px;
+      border-bottom: 1px solid #1e293b;
+      vertical-align: top;
+    }
+
+    #metaTable td:first-child {
+      color: var(--muted);
+      width: 140px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    #metaTable td:last-child {
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    .val-tp  { color: var(--accent); font-weight: 600; }
+    .val-neg { color: var(--amber);  font-weight: 600; }
+    .val-none { color: var(--muted); font-style: italic; }
+
+    /* ── Summary bar at top of clip list ─────────────────────────────────── */
+
+    #listHeader {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      background: #0d1826;
+      font-size: 11px;
+      color: var(--muted);
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    #listHeader span { margin-right: 10px; }
+    #listHeader .cnt-tp  { color: var(--accent); }
+    #listHeader .cnt-neg { color: var(--amber); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Clip Review</h1>
+  <span id="fileInfo">Drop a session JSON to begin</span>
+</header>
+
+<!-- Drop zone -->
+<div id="dropZone">
+  <div class="icon">📂</div>
+  <div>Drop an eval_session_*.json file here</div>
+  <button id="browseBtn">Browse…</button>
+  <input id="fileInput" type="file" accept=".json" />
+</div>
+
+<!-- Main layout -->
+<div id="main">
+  <div id="clipList">
+    <div id="listHeader"></div>
+    <!-- clip items injected here -->
+  </div>
+  <div id="player" class="empty">
+    Select a clip to play it back
+  </div>
+</div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+
+let clips       = [];
+let activeIdx   = -1;
+let playInterval = null;
+let frameIdx    = 0;
+let playing     = true;
+
+// ─── File loading ─────────────────────────────────────────────────────────────
+
+const dropZone  = document.getElementById("dropZone");
+const fileInput = document.getElementById("fileInput");
+
+document.getElementById("browseBtn").addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", (e) => {
+  if (e.target.files[0]) loadFile(e.target.files[0]);
+});
+
+dropZone.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  dropZone.classList.add("over");
+});
+dropZone.addEventListener("dragleave", () => dropZone.classList.remove("over"));
+dropZone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dropZone.classList.remove("over");
+  const file = e.dataTransfer.files[0];
+  if (file) loadFile(file);
+});
+
+function loadFile(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = JSON.parse(e.target.result);
+      clips = Array.isArray(data) ? data : (data.clips || []);
+      if (clips.length === 0) { alert("No clips found in this file."); return; }
+      document.getElementById("fileInfo").textContent =
+        `${file.name}  —  ${clips.length} clip${clips.length !== 1 ? "s" : ""}`;
+      dropZone.style.display = "none";
+      document.getElementById("main").classList.add("visible");
+      renderList();
+      selectClip(0);
+    } catch {
+      alert("Could not parse JSON file.");
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ─── Clip list ────────────────────────────────────────────────────────────────
+
+function labelClass(label) {
+  if (!label) return "none";
+  return label.startsWith("TP_") ? "tp" : "neg";
+}
+
+function renderList() {
+  const listEl = document.getElementById("clipList");
+  // Remove old items (keep listHeader)
+  const header = document.getElementById("listHeader");
+  listEl.innerHTML = "";
+  listEl.appendChild(header);
+
+  const tpCount  = clips.filter(c => c.label?.startsWith("TP_")).length;
+  const negCount = clips.filter(c => c.label?.startsWith("NEG_")).length;
+  header.innerHTML =
+    `<span>${clips.length} clips</span>` +
+    `<span class="cnt-tp">TP: ${tpCount}</span>` +
+    `<span class="cnt-neg">NEG: ${negCount}</span>`;
+
+  clips.forEach((clip, idx) => {
+    const div = document.createElement("div");
+    div.className = "clip-item";
+    div.dataset.idx = idx;
+
+    const cls  = labelClass(clip.label);
+    const ts   = clip.timestamp ? new Date(clip.timestamp).toLocaleTimeString() : "—";
+    const det  = clip.gesture_detected ?? "none";
+    const conf = typeof clip.confidence === "number"
+      ? ` · ${(clip.confidence * 100).toFixed(0)}%`
+      : "";
+
+    div.innerHTML =
+      `<span class="clip-item-id">${clip.clip_id} · ${ts}</span>` +
+      `<span class="clip-item-label ${cls}">${clip.label ?? "unlabeled"}</span>` +
+      `<span class="clip-item-meta">detected: ${det}${conf} · ${clip.num_frames ?? 0}f</span>`;
+
+    div.addEventListener("click", () => selectClip(idx));
+    listEl.appendChild(div);
+  });
+}
+
+function setActiveItem(idx) {
+  document.querySelectorAll(".clip-item").forEach((el) => el.classList.remove("active"));
+  const el = document.querySelector(`.clip-item[data-idx="${idx}"]`);
+  if (el) {
+    el.classList.add("active");
+    el.scrollIntoView({ block: "nearest" });
+  }
+}
+
+// ─── Player ───────────────────────────────────────────────────────────────────
+
+function selectClip(idx) {
+  stopPlayback();
+  activeIdx = idx;
+  setActiveItem(idx);
+
+  const clip   = clips[idx];
+  const frames = clip.frames || [];
+  const player = document.getElementById("player");
+  player.classList.remove("empty");
+
+  // Build player HTML once
+  player.innerHTML = `
+    <img id="playerImg" alt="frame" />
+    <div id="playerControls">
+      <button class="ctrl-btn active" id="playPauseBtn">Pause</button>
+      <span id="frameCounter">Frame 1 / ${frames.length}</span>
+    </div>
+    <table id="metaTable">
+      <tr><td>Clip ID</td><td>${esc(clip.clip_id)}</td></tr>
+      <tr><td>Label</td><td class="val-${labelClass(clip.label)}">${esc(clip.label ?? "unlabeled")}</td></tr>
+      <tr><td>Category</td><td>${esc(clip.category ?? "—")}</td></tr>
+      <tr><td>Detected</td><td>${esc(clip.gesture_detected ?? "none")}</td></tr>
+      <tr><td>Confidence</td><td>${typeof clip.confidence === "number" ? (clip.confidence * 100).toFixed(1) + "%" : "—"}</td></tr>
+      <tr><td>Frames</td><td>${clip.num_frames ?? frames.length}</td></tr>
+      <tr><td>Timestamp</td><td>${esc(clip.timestamp ?? "—")}</td></tr>
+    </table>
+  `;
+
+  document.getElementById("playPauseBtn").addEventListener("click", togglePlayback);
+
+  if (frames.length === 0) {
+    document.getElementById("playerImg").alt = "No frames";
+    document.getElementById("frameCounter").textContent = "No frames";
+    return;
+  }
+
+  frameIdx = 0;
+  playing  = true;
+  showFrame(frames);
+  playInterval = setInterval(() => {
+    if (!playing) return;
+    frameIdx = (frameIdx + 1) % frames.length;
+    showFrame(frames);
+  }, 100); // 10 fps
+}
+
+function showFrame(frames) {
+  const img = document.getElementById("playerImg");
+  const ctr = document.getElementById("frameCounter");
+  if (!img) return;
+  img.src = `data:image/jpeg;base64,${frames[frameIdx]}`;
+  if (ctr) ctr.textContent = `Frame ${frameIdx + 1} / ${frames.length}`;
+}
+
+function stopPlayback() {
+  if (playInterval) { clearInterval(playInterval); playInterval = null; }
+}
+
+function togglePlayback() {
+  playing = !playing;
+  const btn = document.getElementById("playPauseBtn");
+  if (btn) {
+    btn.textContent = playing ? "Pause" : "Play";
+    btn.classList.toggle("active", playing);
+  }
+}
+
+// ─── Keyboard navigation ──────────────────────────────────────────────────────
+
+document.addEventListener("keydown", (e) => {
+  if (clips.length === 0) return;
+  if (e.key === "ArrowDown" || e.key === "j") {
+    e.preventDefault();
+    selectClip(Math.min(activeIdx + 1, clips.length - 1));
+  } else if (e.key === "ArrowUp" || e.key === "k") {
+    e.preventDefault();
+    selectClip(Math.max(activeIdx - 1, 0));
+  } else if (e.key === " ") {
+    e.preventDefault();
+    togglePlayback();
+  }
+});
+
+// ─── Util ─────────────────────────────────────────────────────────────────────
+
+function esc(str) {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+</script>
+</body>
+</html>
