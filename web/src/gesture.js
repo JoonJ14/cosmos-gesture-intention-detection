@@ -620,7 +620,15 @@ export function proposeGestureFromLandmarks(results) {
 
     console.log(`[GESTURE FRAME] ${side}: accepted, swipe=${hs.swipe.state}, close=${hs.close.state}, palm=${hs.palm.state}, closeIsTracking=${closeIsTracking}, openMenuActive=${openMenuActive}`);
 
-    let proposal = updateSwipe(side, hs, lms, mpConf, now);
+    // Suppress swipe when the user is mid-open-menu or mid-close-menu sequence.
+    // Any lateral hand motion during those sequences is part of the gesture, not a swipe.
+    const swipeSuppressed = openMenuActive || closeIsTracking;
+    if (swipeSuppressed) {
+      console.log("[SWIPE] suppressed — open/close menu active");
+      hs.swipe.state = "IDLE";  // reset so swipe doesn't accumulate displacement during suppression
+    }
+
+    let proposal = swipeSuppressed ? null : updateSwipe(side, hs, lms, mpConf, now);
     if (!proposal) proposal = updateClose(side, hs, lms, mpConf, now);
     if (!proposal && (!closeIsTracking || openMenuActive)) proposal = updatePalm(side, hs, lms, mpConf, now);
 
