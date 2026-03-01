@@ -1,4 +1,4 @@
-import { callExecutor, callVerifier, getVerifierBaseUrl, setVerifierBaseUrl } from "./api.js";
+import { callExecutor, callVerifier, callStudent, getVerifierBaseUrl, setVerifierBaseUrl, getStudentBaseUrl, setStudentBaseUrl } from "./api.js";
 import {
   createEventId,
   createHandsPipeline,
@@ -10,18 +10,30 @@ import {
 import { drawHandsOverlay, syncOverlaySize } from "./overlay.js";
 import { getEvidenceWindow, pushFrame } from "./ringbuffer.js";
 
-const videoElement       = document.getElementById("video");
-const overlayElement     = document.getElementById("overlay");
-const safeModeToggle     = document.getElementById("safeModeToggle");
+const videoElement         = document.getElementById("video");
+const overlayElement       = document.getElementById("overlay");
+const safeModeToggle       = document.getElementById("safeModeToggle");
 const verifierTimeoutInput = document.getElementById("verifierTimeoutMs");
-const verifierUrlInput   = document.getElementById("verifierUrl");
-const statusElement      = document.getElementById("status");
+const verifierUrlInput     = document.getElementById("verifierUrl");
+const studentUrlInput      = document.getElementById("studentUrl");
+const statusElement        = document.getElementById("status");
+const studentStatusElement = document.getElementById("studentStatus");
 
 // Initialize verifier URL input from query param or default, then keep in sync.
 verifierUrlInput.value = getVerifierBaseUrl();
 verifierUrlInput.addEventListener("change", (e) => {
   setVerifierBaseUrl(e.target.value.trim());
 });
+
+// Initialize student URL input from query param or default, then keep in sync.
+studentUrlInput.value = getStudentBaseUrl();
+studentUrlInput.addEventListener("change", (e) => {
+  setStudentBaseUrl(e.target.value.trim());
+});
+
+function updateStudentStatus(message) {
+  studentStatusElement.textContent = `Student: ${message}`;
+}
 
 const EVENT_STATES = Object.freeze({
   PROPOSED:  "proposed",
@@ -42,6 +54,7 @@ const POLICY_PATHS = new Set([
   "safe_mode_verified",
   "unsafe_direct",
   "superseded",
+  "student_suppressed",
   "executor_error",
   "verifier_error",
   "runtime_error",
@@ -130,6 +143,8 @@ function emitTerminalEventLog(event, terminalMs = nowMs()) {
       ? { verifier_intentional: event.verifier_intentional } : {}),
     ...(event.verifier_confidence !== undefined
       ? { verifier_confidence: event.verifier_confidence } : {}),
+    ...(event.features          ? { features:           event.features          } : {}),
+    ...(event.student_prediction ? { student_prediction: event.student_prediction } : {}),
   };
 
   console.log(payload);
@@ -165,10 +180,11 @@ function clearActiveVerifyIfMatch(eventId) {
  * @param {number|null} confidence      — local gesture confidence (0–1), or null
  * @param {string[]|null} frames        — base64 JPEG evidence frames, or null
  * @param {object|null} landmarkSummary — landmark context for verifier, or null
+ * @param {object|null} features        — feature vector for student classifier, or null
  */
 function createEvent(
   intent, trigger, proposalStartMs,
-  confidence = null, frames = null, landmarkSummary = null,
+  confidence = null, frames = null, landmarkSummary = null, features = null,
 ) {
   const event = {
     event_id:               createEventId(),
@@ -178,6 +194,8 @@ function createEvent(
     confidence,
     frames,
     landmarkSummary,
+    features,
+    student_prediction:     null,
     safe_mode:              safeModeToggle.checked,
     state:                  EVENT_STATES.PROPOSED,
     superseded:             false,
@@ -263,13 +281,17 @@ function shouldBlockExecution(event) {
 //
 function fireAsyncVerify(event) {
   const payload = {
-    event_id:       event.event_id,
-    proposed_intent: event.intent,
+    event_id:         event.event_id,
+    proposed_intent:  event.intent,
     local_confidence: event.confidence ?? 0.7,
     ...(event.frames && event.frames.length > 0
       ? { frames: event.frames } : {}),
     ...(event.landmarkSummary
       ? { landmark_summary_json: event.landmarkSummary } : {}),
+    ...(event.features
+      ? { features: event.features } : {}),
+    ...(event.student_prediction
+      ? { student_prediction: event.student_prediction } : {}),
   };
 
   // 30s timeout — Cosmos can take up to ~9s for 8 frames; give headroom
@@ -300,6 +322,38 @@ async function processEvent(event) {
   let approvedIntent = event.intent;
   let stage = "runtime";
 
+  // ── Student prediction (fire-and-forget with 500ms timeout) ─────────────────
+  // Fails gracefully: unavailable service or timeout → always execute.
+  const defaultPrediction = { execute: true, confidence: 0.0, model_version: null, mode: "shadow" };
+  try {
+    event.student_prediction = await callStudent({
+      type:     event.intent,
+      features: event.features || {},
+    });
+  } catch {
+    event.student_prediction = defaultPrediction;
+    console.log("[STUDENT] service unavailable, defaulting to execute");
+  }
+  const sp = event.student_prediction;
+  const studentStr = sp.model_version
+    ? `${sp.execute ? "EXECUTE" : "SUPPRESS"} (${sp.confidence.toFixed(2)}) ${sp.model_version} [${sp.mode}]`
+    : "no model";
+  console.log(`[STUDENT] ${studentStr}`);
+  updateStudentStatus(studentStr);
+
+  // Active-mode suppression: only if a real model exists and student says suppress
+  if (sp.model_version !== null && !sp.execute) {
+    // Always send to Cosmos for labeling even when suppressing
+    if (event.frames && event.frames.length > 0) {
+      fireAsyncVerify(event);
+    }
+    setPolicyPath(event, "student_suppressed");
+    setEventState(event, EVENT_STATES.REJECTED);
+    setStatus(`Student suppressed ${event.intent} (${sp.confidence.toFixed(2)}).`, "warn");
+    emitTerminalEventLog(event, nowMs());
+    return;
+  }
+
   try {
     if (event.safe_mode) {
       // ── Safe Mode: block on Cosmos response before executing ──────────────
@@ -315,13 +369,17 @@ async function processEvent(event) {
       try {
         verifierResponse = await callVerifier(
           {
-            event_id:        event.event_id,
-            proposed_intent: event.intent,
+            event_id:         event.event_id,
+            proposed_intent:  event.intent,
             local_confidence: event.confidence ?? 0.7,
             ...(event.frames && event.frames.length > 0
               ? { frames: event.frames } : {}),
             ...(event.landmarkSummary
               ? { landmark_summary_json: event.landmarkSummary } : {}),
+            ...(event.features
+              ? { features: event.features } : {}),
+            ...(event.student_prediction
+              ? { student_prediction: event.student_prediction } : {}),
             policy_hint: "safe_mode",
           },
           timeoutMs,
@@ -396,6 +454,8 @@ async function processEvent(event) {
       intent:   approvedIntent,
       source:   "web",
       dry_run:  false,
+      ...(event.features          ? { features:           event.features          } : {}),
+      ...(event.student_prediction ? { student_prediction: event.student_prediction } : {}),
     });
     event.timestamps.exec_recv_ms = nowMs();
 
@@ -447,10 +507,11 @@ async function processEvent(event) {
  * @param {number|null} confidence      — local gesture score, or null
  * @param {string[]|null} frames        — evidence window, or null
  * @param {object|null} landmarkSummary — landmark JSON for verifier, or null
+ * @param {object|null} features        — feature vector for student classifier, or null
  */
 function handleIntentProposal(
   intent, trigger = "unknown",
-  confidence = null, frames = null, landmarkSummary = null,
+  confidence = null, frames = null, landmarkSummary = null, features = null,
 ) {
   const proposalTs = nowMs();
 
@@ -460,7 +521,7 @@ function handleIntentProposal(
     return;
   }
 
-  const event = createEvent(intent, trigger, proposalTs, confidence, frames, landmarkSummary);
+  const event = createEvent(intent, trigger, proposalTs, confidence, frames, landmarkSummary, features);
 
   supersedePreviousInFlightIfNeeded(event.event_id);
 
@@ -506,6 +567,7 @@ async function bootstrap() {
           proposal.confidence,
           frames,
           proposal.landmarkSummary,
+          proposal.features,
         );
       }
     });

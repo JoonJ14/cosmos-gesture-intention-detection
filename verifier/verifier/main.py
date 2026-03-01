@@ -39,6 +39,8 @@ class VerifyRequest(BaseModel):
     local_confidence: float | None = None
     force_reject: bool = False
     policy_hint: str | None = None
+    features: dict[str, Any] | None = None           # feature vector from gesture.js extractFeatures
+    student_prediction: dict[str, Any] | None = None  # student classifier prediction
 
 
 class VerifyResponse(BaseModel):
@@ -113,6 +115,8 @@ def verify(req: VerifyRequest, force_reject: bool = Query(default=False)) -> Ver
             "response_json": response_json,
             "schema_valid": schema_valid,
             **({"policy_hint": req.policy_hint} if req.policy_hint else {}),
+            **({"features": req.features} if req.features else {}),
+            **({"student_prediction": req.student_prediction} if req.student_prediction else {}),
             **({"error": schema_error} if schema_error else {}),
         }
         append_jsonl(VERIFIER_LOG_PATH, log_record)

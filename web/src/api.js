@@ -13,6 +13,18 @@ export function setVerifierBaseUrl(url) {
   _verifierBaseUrl = url;
 }
 
+// Student service URL: configurable via ?student=http://... query param.
+const _qpStudent = new URLSearchParams(window.location.search).get("student");
+let _studentBaseUrl = _qpStudent || "http://127.0.0.1:8789";
+
+export function getStudentBaseUrl() {
+  return _studentBaseUrl;
+}
+
+export function setStudentBaseUrl(url) {
+  _studentBaseUrl = url;
+}
+
 async function fetchWithTimeout(url, options, timeoutMs) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -48,6 +60,25 @@ export async function callVerifier(payload, timeoutMs = 800) {
     throw new Error(`Verifier request failed (${response.status}): ${body}`);
   }
 
+  return response.json();
+}
+
+// Calls the student classifier service for execute/suppress prediction.
+// Returns {execute, confidence, model_version, mode} or throws on network failure.
+export async function callStudent(payload, timeoutMs = 500) {
+  const url = new URL("/predict", _studentBaseUrl);
+  const response = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    timeoutMs,
+  );
+  if (!response.ok) {
+    throw new Error(`Student request failed (${response.status})`);
+  }
   return response.json();
 }
 

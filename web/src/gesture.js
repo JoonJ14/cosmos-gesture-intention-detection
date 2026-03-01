@@ -94,6 +94,66 @@ function closeConfidence(mpConf, openFingers, closeFingers, elapsed, handSpan) {
             0.15 * 1.0 + 0.15 * size);
 }
 
+// ─── Feature extraction for teacher-student pipeline ─────────────────────────
+//
+// Called at proposal time. Returns a 12-feature object (+ gestureType string)
+// that the student service uses for execute/suppress prediction.
+// All numeric values are rounded to 2 decimal places.
+//
+function extractFeatures(lms, side, gestureType, proposal, hs) {
+  const isSwipe = gestureType === "SWITCH_RIGHT" || gestureType === "SWITCH_LEFT";
+  const ls      = proposal.landmarkSummary;
+
+  // Swipe displacement and duration (0 for non-swipe gestures)
+  const swipeDisplacement = isSwipe ? (ls.displacement_pct || 0) : 0;
+  const swipeDuration     = isSwipe ? (ls.duration_s       || 0) : 0;
+
+  // Peak single-frame wrist x-displacement during the gesture window
+  let peakVelocity = 0;
+  if (isSwipe && ls.wrist_trajectory_x && ls.wrist_trajectory_x.length > 1) {
+    const traj = ls.wrist_trajectory_x;
+    for (let i = 1; i < traj.length; i++) {
+      peakVelocity = Math.max(peakVelocity, Math.abs(traj[i] - traj[i - 1]));
+    }
+  } else {
+    const pos = hs.recentWristPositions;
+    for (let i = 1; i < pos.length; i++) {
+      peakVelocity = Math.max(peakVelocity, Math.abs(pos[i].x - pos[i - 1].x));
+    }
+  }
+
+  // Signed average wrist velocity over last 5 frames (positive = rightward/downward)
+  let wristVelocityX = 0;
+  let wristVelocityY = 0;
+  const recent = hs.recentWristPositions.slice(-5);
+  if (recent.length > 1) {
+    let sumX = 0, sumY = 0;
+    for (let i = 1; i < recent.length; i++) {
+      sumX += recent[i].x - recent[i - 1].x;
+      sumY += recent[i].y - recent[i - 1].y;
+    }
+    wristVelocityX = sumX / (recent.length - 1);
+    wristVelocityY = sumY / (recent.length - 1);
+  }
+
+  return {
+    swipeDisplacement: r2(swipeDisplacement),
+    swipeDuration:     r2(swipeDuration),
+    peakVelocity:      r2(peakVelocity),
+    fingersExtended:   ls.fingers_extended ?? countExtendedFingers(lms),
+    handSide:          side === "Right" ? 1 : 0,
+    handSpan:          r2(getHandSpan(lms)),
+    wristX:            r2(lms[LM_WRIST].x),
+    wristY:            r2(lms[LM_WRIST].y),
+    // z-depth differential: fingertip closer to camera than wrist → negative value → palm facing camera
+    palmFacing:        r2(lms[LM_MIDDLE_TIP].z - lms[LM_WRIST].z),
+    wristVelocityX:    r2(wristVelocityX),
+    wristVelocityY:    r2(wristVelocityY),
+    stateConfidence:   r2(proposal.confidence),
+    gestureType,
+  };
+}
+
 // ─── Per-hand state machines ──────────────────────────────────────────────────
 
 function makeHandState() {
@@ -103,6 +163,7 @@ function makeHandState() {
     swipe: { state: "IDLE", startX: null, startTs: null, trajX: [] },
     palm:  { state: "IDLE", fistStartTs: null, palmStartTs: null, startWX: null, openCount: 0 },
     close: { state: "IDLE", startTs: null, palmStartWX: null, openCount: 0, openFingers: 0, fistStartTs: null },
+    recentWristPositions: [],   // last 10 {x, y} wrist positions for velocity features
   };
 }
 
@@ -112,6 +173,7 @@ function resetHandState(hs) {
   hs.swipe = { state: "IDLE", startX: null, startTs: null, trajX: [] };
   hs.palm  = { state: "IDLE", fistStartTs: null, palmStartTs: null, startWX: null, openCount: 0 };
   hs.close = { state: "IDLE", startTs: null, palmStartWX: null, openCount: 0, openFingers: 0, fistStartTs: null };
+  hs.recentWristPositions = [];
 }
 
 const perHand = { Right: makeHandState(), Left: makeHandState() };
@@ -537,6 +599,10 @@ export function proposeGestureFromLandmarks(results) {
       continue;
     }
 
+    // Track wrist position history for student feature extraction
+    hs.recentWristPositions.push({ x: lms[LM_WRIST].x, y: lms[LM_WRIST].y });
+    if (hs.recentWristPositions.length > 10) hs.recentWristPositions.shift();
+
     // Run state machines in priority order.
     // Swipe: fastest & highest priority (purely temporal).
     // Close: requires open-palm precondition (medium priority).
@@ -567,6 +633,9 @@ export function proposeGestureFromLandmarks(results) {
     if (proposal) {
       lastProposalTs = now;
 
+      // Extract features before resetting hand state (recentWristPositions is still populated)
+      const features = extractFeatures(lms, side, proposal.intent, proposal, hs);
+
       // Reset all per-hand state so stale swipe/palm timers don't carry over
       // into the next detection window after the cooldown expires.
       resetHandState(perHand.Left);
@@ -578,6 +647,7 @@ export function proposeGestureFromLandmarks(results) {
         "| side:", side,
         "| disp:", proposal.landmarkSummary?.displacement_pct,
         "| dur:", proposal.landmarkSummary?.duration_s + "s",
+        "| features:", features,
       );
 
       return {
@@ -586,6 +656,7 @@ export function proposeGestureFromLandmarks(results) {
         landmarks:       lms,
         handedness:      side,
         landmarkSummary: proposal.landmarkSummary,
+        features,
       };
     }
   }

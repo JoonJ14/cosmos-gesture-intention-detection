@@ -32,6 +32,8 @@ class ExecuteRequest(BaseModel):
     event_id: str | None = None
     dry_run: bool = False
     source: str = "web"
+    features: dict | None = None           # feature vector from gesture.js extractFeatures
+    student_prediction: dict | None = None  # student classifier prediction
 
 
 class ExecuteResponse(BaseModel):
@@ -193,6 +195,8 @@ def execute(req: ExecuteRequest) -> ExecuteResponse:
                 "source": req.source,
                 "os_name": os_key,
                 "latency_ms": latency_ms,
+                **({"features": req.features} if req.features else {}),
+                **({"student_prediction": req.student_prediction} if req.student_prediction else {}),
             }
         )
 
