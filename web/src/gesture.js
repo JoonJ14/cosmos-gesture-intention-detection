@@ -316,6 +316,13 @@ function updateClose(side, hs, lms, mpConf, now) {
     if (isOpen) {
       c.openCount++;
       if (c.openCount >= REQUIRED_FRAMES) {
+        // OPEN_MENU has priority: if it already detected a fist and is counting
+        // toward palm completion, don't let CLOSE_MENU steal the palm.
+        if (hs.palm.state === "FIST_DETECTED" || hs.palm.state === "PALM_OPENED") {
+          console.log(`[CLOSE_MENU] IDLE: OPEN_MENU is in ${hs.palm.state}, deferring OPEN_SEEN`);
+          c.openCount = 0;  // reset so CLOSE_MENU starts fresh after OPEN_MENU finishes
+          return null;
+        }
         c.startTs     = now;
         c.palmStartWX = wX;
         c.openFingers = fingers;
@@ -539,21 +546,27 @@ export function proposeGestureFromLandmarks(results) {
     // Close: requires open-palm precondition (medium priority).
     // Palm hold: slowest — only fires if swipe/close didn't.
     //
-    // Mutual exclusion: while CLOSE_MENU is tracking (OPEN_SEEN or FIST_SEEN),
-    // suppress OPEN_MENU so the same palm does not double-trigger.
+    // Mutual exclusion with priority:
+    //   CLOSE_MENU (OPEN_SEEN/FIST_SEEN) suppresses OPEN_MENU — BUT only when
+    //   OPEN_MENU is still IDLE. Once OPEN_MENU has detected a fist and is in
+    //   FIST_DETECTED or PALM_OPENED, it owns the hand and must not be reset.
+    //   (CLOSE_MENU's IDLE guard above already prevents it from entering OPEN_SEEN
+    //   while OPEN_MENU is active, so this path only applies to IDLE suppression.)
     const closeIsTracking = hs.close.state === "OPEN_SEEN" || hs.close.state === "FIST_SEEN";
-    if (closeIsTracking) {
-      console.log(`[GESTURE FRAME] ${side}: closeIsTracking=true (${hs.close.state}), suppressing OPEN_MENU`);
+    const openMenuActive  = hs.palm.state === "FIST_DETECTED" || hs.palm.state === "PALM_OPENED";
+
+    if (closeIsTracking && !openMenuActive) {
+      console.log(`[GESTURE FRAME] ${side}: closeIsTracking (${hs.close.state}), palm IDLE → suppressing OPEN_MENU`);
       hs.palm.state       = "IDLE";
       hs.palm.fistStartTs = null;
       hs.palm.palmStartTs = null;
     }
 
-    console.log(`[GESTURE FRAME] ${side}: accepted, swipe=${hs.swipe.state}, close=${hs.close.state}, palm=${hs.palm.state}, closeIsTracking=${closeIsTracking}`);
+    console.log(`[GESTURE FRAME] ${side}: accepted, swipe=${hs.swipe.state}, close=${hs.close.state}, palm=${hs.palm.state}, closeIsTracking=${closeIsTracking}, openMenuActive=${openMenuActive}`);
 
     let proposal = updateSwipe(side, hs, lms, mpConf, now);
     if (!proposal) proposal = updateClose(side, hs, lms, mpConf, now);
-    if (!proposal && !closeIsTracking) proposal = updatePalm(side, hs, lms, mpConf, now);
+    if (!proposal && (!closeIsTracking || openMenuActive)) proposal = updatePalm(side, hs, lms, mpConf, now);
 
     if (proposal) {
       lastProposalTs = now;
