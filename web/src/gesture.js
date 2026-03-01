@@ -20,7 +20,7 @@ const CLOSE_MAX_MS            = 1000; // total timeout for CLOSE_MENU sequence
 const CLOSE_FIST_HOLD_MS      = 75;   // fist must be held this long to fire CLOSE_MENU
 const REQUIRED_FRAMES         = 1;    // consecutive frames before accepting hand
 const MIN_HAND_SPAN           = 0.015; // ignore hands < 1.5% of frame width
-const COOLDOWN_MS             = 800;  // global cooldown after any proposal
+const COOLDOWN_MS             = 1200; // global cooldown after any proposal
 
 // ─── Finger & palm helpers ────────────────────────────────────────────────────
 
