@@ -9,6 +9,20 @@ import {
 } from "./gesture.js";
 import { drawHandsOverlay, syncOverlaySize } from "./overlay.js";
 import { getEvidenceWindow, pushFrame } from "./ringbuffer.js";
+import {
+  autoCapture,
+  getStats,
+  hasPendingClip,
+  isAutoCapture,
+  isRecordingEnabled,
+  labelPendingClip,
+  manualCapture,
+  notifyGesture,
+  saveSession,
+  setOnStateChange,
+  toggleAutoCapture,
+  toggleRecording,
+} from "./recorder.js";
 
 const videoElement         = document.getElementById("video");
 const overlayElement       = document.getElementById("overlay");
@@ -528,21 +542,103 @@ function handleIntentProposal(
   void processEvent(event);
 }
 
-// ─── Keyboard shortcuts (keep as manual test overrides) ──────────────────────
+// ─── Recording UI ─────────────────────────────────────────────────────────────
 
-function installKeyboardIntentStub() {
+function updateRecordingUI() {
+  const recStatus      = document.getElementById("recStatus");
+  const autoCaptureBtn = document.getElementById("autoCaptureBtn");
+  const recCounter     = document.getElementById("recCounter");
+  const pendingNotice  = document.getElementById("pendingNotice");
+
+  // Status indicator
+  if (!isRecordingEnabled()) {
+    recStatus.textContent = "IDLE";
+    recStatus.className   = "idle";
+  } else if (hasPendingClip()) {
+    recStatus.textContent = "PENDING LABEL";
+    recStatus.className   = "pending";
+  } else {
+    recStatus.textContent = "READY";
+    recStatus.className   = "ready";
+  }
+
+  // Auto-capture button
+  autoCaptureBtn.textContent = `Auto-capture: ${isAutoCapture() ? "ON" : "OFF"}`;
+  autoCaptureBtn.classList.toggle("active", isAutoCapture());
+
+  // Counter and pending notice
+  const stats = getStats();
+  recCounter.textContent = `${stats.total} clip${stats.total !== 1 ? "s" : ""}`;
+  pendingNotice.style.display = stats.pending ? "block" : "none";
+}
+
+// ─── Keyboard handler ─────────────────────────────────────────────────────────
+
+function installKeyboardHandler() {
   window.addEventListener("keydown", (e) => {
+    // Test intent shortcuts (keys 1–4) — never recording-dependent
     const intent = intentFromTestKey(e.key);
-    if (!intent) return;
-    e.preventDefault();
-    // Keyboard tests use no evidence — Cosmos async verify is skipped for these.
-    handleIntentProposal(intent, "keyboard_test");
+    if (intent) {
+      e.preventDefault();
+      handleIntentProposal(intent, "keyboard_test");
+      return;
+    }
+
+    // R — toggle recording panel
+    if (e.key === "r" || e.key === "R") {
+      e.preventDefault();
+      const panel   = document.getElementById("recordingPanel");
+      const visible = panel.style.display !== "none";
+      panel.style.display = visible ? "none" : "block";
+      toggleRecording();
+      updateRecordingUI();
+      return;
+    }
+
+    // A — toggle auto-capture (only when recording panel is open)
+    if ((e.key === "a" || e.key === "A") && isRecordingEnabled()) {
+      e.preventDefault();
+      toggleAutoCapture();
+      updateRecordingUI();
+      return;
+    }
+
+    // Space — manual capture (only when recording panel is open)
+    if (e.key === " " && isRecordingEnabled()) {
+      e.preventDefault();
+      manualCapture(() => getEvidenceWindow(8));
+      updateRecordingUI();
+    }
   });
 }
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
 async function bootstrap() {
+  // Wire recording UI buttons
+  setOnStateChange(updateRecordingUI);
+
+  document.getElementById("captureBtn").addEventListener("click", () => {
+    manualCapture(() => getEvidenceWindow(8));
+    updateRecordingUI();
+  });
+
+  document.getElementById("autoCaptureBtn").addEventListener("click", () => {
+    toggleAutoCapture();
+    updateRecordingUI();
+  });
+
+  document.getElementById("saveSessionBtn").addEventListener("click", () => {
+    saveSession();
+  });
+
+  document.querySelectorAll(".label-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      labelPendingClip(btn.dataset.label);
+      updateRecordingUI();
+    });
+  });
+
   try {
     await setupCamera(videoElement);
     syncOverlaySize(videoElement, overlayElement);
@@ -560,6 +656,13 @@ async function bootstrap() {
       if (proposal) {
         // Grab the evidence window covering the gesture (8 evenly-spaced frames)
         const frames = getEvidenceWindow(8);
+
+        // Inform recorder so manual Space capture can attach gesture context
+        notifyGesture(proposal.intent, proposal.confidence, proposal.features, frames);
+
+        // Auto-capture to session if enabled
+        autoCapture(proposal.intent, proposal.confidence, proposal.features, frames);
+        updateRecordingUI();
 
         handleIntentProposal(
           proposal.intent,
@@ -582,7 +685,7 @@ async function bootstrap() {
       setStatus("MediaPipe Hands unavailable; keyboard test mode only.", "warn");
     }
 
-    installKeyboardIntentStub();
+    installKeyboardHandler();
   } catch (error) {
     setStatus(`Initialization failed: ${error.message}`, "bad");
     console.error(error);

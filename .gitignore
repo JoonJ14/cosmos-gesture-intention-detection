@@ -19,10 +19,19 @@ verifier/logs/*.jsonl
 .env.*
 *.env
 
-# Captured frame data (keep docs but ignore raw frames/clips)
+# Captured frame data (keep docs and directory structure, ignore raw frames/clips)
 data/*
 !data/.gitkeep
 !data/*.md
+!data/eval/
+!data/eval/clips/
+!data/eval/clips/.gitkeep
+!data/eval/results/
+!data/eval/results/.gitkeep
+!data/eval/sessions/
+!data/eval/sessions/.gitkeep
+!data/calibration/
+!data/calibration/.gitkeep
 
 # OS
 .DS_Store

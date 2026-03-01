@@ -116,6 +116,93 @@
       .bad {
         color: #ef4444;
       }
+
+      /* ── Recording panel ─────────────────────────────────────────────────── */
+
+      #recordingPanel {
+        margin-top: 8px;
+      }
+
+      .rec-row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+
+      .rec-row:last-child {
+        margin-bottom: 0;
+      }
+
+      .rec-group-label {
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        min-width: 100px;
+      }
+
+      button.rec-btn {
+        background: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 6px;
+        color: var(--fg);
+        cursor: pointer;
+        font-size: 12px;
+        padding: 5px 10px;
+        white-space: nowrap;
+      }
+
+      button.rec-btn:hover {
+        background: #334155;
+      }
+
+      button.rec-btn.active {
+        background: var(--accent);
+        color: #0f172a;
+        border-color: var(--accent);
+      }
+
+      button.label-btn.tp {
+        border-color: #22c55e55;
+      }
+
+      button.label-btn.tp:hover {
+        background: #14532d55;
+        border-color: var(--accent);
+      }
+
+      button.label-btn.neg {
+        border-color: #f59e0b55;
+      }
+
+      button.label-btn.neg:hover {
+        background: #78350f55;
+        border-color: #f59e0b;
+      }
+
+      #recStatus {
+        font-size: 12px;
+        font-weight: bold;
+        padding: 2px 8px;
+        border-radius: 4px;
+        background: #0f172a;
+      }
+
+      #recStatus.idle    { color: var(--muted); }
+      #recStatus.ready   { color: var(--accent); }
+      #recStatus.pending { color: #f59e0b; }
+
+      #pendingNotice {
+        font-size: 12px;
+        color: #f59e0b;
+        margin-bottom: 8px;
+        padding: 4px 8px;
+        background: #78350f22;
+        border: 1px solid #f59e0b44;
+        border-radius: 4px;
+      }
     </style>
   </head>
   <body>
@@ -140,7 +227,8 @@
           </label>
         </div>
         <div class="hint">
-          Test keys: 1=OPEN_MENU, 2=CLOSE_MENU, 3=SWITCH_RIGHT, 4=SWITCH_LEFT
+          Test keys: 1=OPEN_MENU 2=CLOSE_MENU 3=SWITCH_RIGHT 4=SWITCH_LEFT &nbsp;|&nbsp;
+          <strong>R</strong>=recording panel &nbsp;<strong>Space</strong>=capture clip &nbsp;<strong>A</strong>=auto-capture
         </div>
       </section>
 
@@ -151,6 +239,40 @@
         </div>
         <div id="status" class="status">Initializing webcam and hand tracking...</div>
         <div id="studentStatus" class="status" style="font-size:12px;color:#64748b;">Student: no model</div>
+      </section>
+
+      <!-- Recording panel — hidden by default, toggle with R key -->
+      <section id="recordingPanel" class="panel" style="display:none;">
+        <div class="rec-row">
+          <strong style="font-size:13px;">Recording</strong>
+          <span id="recStatus" class="idle">IDLE</span>
+          <button id="autoCaptureBtn" class="rec-btn" title="Toggle auto-capture [A]">Auto-capture: OFF</button>
+          <button id="captureBtn" class="rec-btn" title="Capture clip [Space]">Capture [Space]</button>
+          <button id="saveSessionBtn" class="rec-btn" title="Download all clips as JSON">Save Session</button>
+          <span id="recCounter" style="font-size:12px;color:var(--muted);">0 clips</span>
+        </div>
+
+        <div id="pendingNotice" style="display:none;">
+          Clip captured — select a label:
+        </div>
+
+        <div class="rec-row">
+          <span class="rec-group-label">True Positives</span>
+          <button class="rec-btn label-btn tp" data-label="TP_OPEN_MENU">OPEN_MENU</button>
+          <button class="rec-btn label-btn tp" data-label="TP_CLOSE_MENU">CLOSE_MENU</button>
+          <button class="rec-btn label-btn tp" data-label="TP_SWITCH_RIGHT">SWITCH_RIGHT</button>
+          <button class="rec-btn label-btn tp" data-label="TP_SWITCH_LEFT">SWITCH_LEFT</button>
+        </div>
+
+        <div class="rec-row">
+          <span class="rec-group-label">Hard Negatives</span>
+          <button class="rec-btn label-btn neg" data-label="NEG_HEAD_SCRATCH">HEAD_SCRATCH</button>
+          <button class="rec-btn label-btn neg" data-label="NEG_REACH">REACH</button>
+          <button class="rec-btn label-btn neg" data-label="NEG_WAVE">WAVE</button>
+          <button class="rec-btn label-btn neg" data-label="NEG_PHONE">PHONE</button>
+          <button class="rec-btn label-btn neg" data-label="NEG_STRETCH">STRETCH</button>
+          <button class="rec-btn label-btn neg" data-label="NEG_OTHER">OTHER</button>
+        </div>
       </section>
     </main>
 
