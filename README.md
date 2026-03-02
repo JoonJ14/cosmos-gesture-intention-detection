@@ -72,6 +72,49 @@ We demonstrate Cosmos's value with **8 hard negative scenarios** — motions tha
 
 **Key metric:** False positive rate on hard negatives — baseline (local only) vs. with Cosmos verification.
 
+Beyond accuracy, Cosmos also delivers **dramatically faster iteration cycles** than traditional ML — a prompt change can be validated in minutes rather than after hours of retraining. See [Rapid Iteration via Prompt Engineering](#rapid-iteration-via-prompt-engineering) below.
+
+## Rapid Iteration via Prompt Engineering
+
+One of Cosmos's most valuable properties isn't just accuracy — it's **iteration speed.** When something goes wrong with a traditional ML classifier, you retrain. With Cosmos, you edit English text. Here's how that played out during development.
+
+### From Near-Zero to 100% TP Recall in 5 Minutes
+
+We evaluated Cosmos against **151 labeled clips** (70 true positives + 81 hard negatives). Our initial prompt was rejection-biased — it listed every motion to reject but never described what an intentional gesture actually looks like. Result: Cosmos rejected nearly everything, including real intentional gestures. **TP recall was ~15%.**
+
+The fix took under 5 minutes: rewrite the system prompt to add gesture descriptions, signs of intentional intent, and a balanced decision guideline. Zero retraining. Zero data pipeline changes. **TP recall went from ~15% to 100%.**
+
+### Five Iterations, ~25 Minutes Total
+
+| Iteration | Change | TP Recall | NEG Rejection | Notes |
+|-----------|--------|-----------|---------------|-------|
+| 1 | Original prompt (rejection-biased) | ~15% | ~95% | Stopped early — too aggressive |
+| 2 | Balanced prompt + gesture descriptions | **100%** | 71.6% | Fixed in < 5 min |
+| 3 | + Gaze direction + yawning awareness | **100%** | 77.8% | Incremental improvement |
+| 4 | + Reach-specific lateral motion guidance | 98.6% ⚠️ | 80.2% | TP regression discovered |
+| 5 | Reverted broad language, kept targeted reach | **100%** | 79.0% | Best with 100% TP recall |
+
+### The Tradeoff Discovery
+
+Iteration 4 revealed a critical precision-recall tradeoff: tightening rejection criteria for reaching motions directly risks rejecting real swipe gestures, because the two motions are **kinematically identical.** We made a principled decision to prioritize TP recall over marginal FP improvement — a missed intentional gesture breaks user trust ("the system doesn't work"), while an occasional false positive is merely annoying. We reverted the harmful language in Iteration 5, restoring 100% TP recall while keeping most of the gains.
+
+This kind of rapid experimentation, discovery, and rollback is only possible with VLM-based verification. With traditional ML, each cycle would require hours of retraining.
+
+### The Hardest Category
+
+Reaching for nearby objects remains at 0% rejection — lateral hand displacement during a reach is kinematically indistinguishable from a real swipe in sampled frames. This is the genuine frontier challenge, and it validates the need for the teacher-student feedback loop: even a VLM needs ongoing context beyond static frames.
+
+### Scalability: Prompt Engineering vs. Retraining
+
+| Scenario | Traditional ML | VLM (Cosmos) |
+|----------|---------------|--------------|
+| Fix bad classification | Retrain (hours/days) | Edit prompt (minutes) |
+| Add new gesture | Collect data + retrain | Add text description |
+| Add false positive category | Collect negatives + retrain | Add sentence to prompt |
+| Discover tradeoffs | Multiple retrain cycles | Run eval, compare, revert in minutes |
+
+For detailed per-iteration metrics and category breakdowns, see [`docs/COSMOS_PERFORMANCE_TRACKING.md`](docs/COSMOS_PERFORMANCE_TRACKING.md) and [`docs/PROMPT_ENGINEERING_LOG.md`](docs/PROMPT_ENGINEERING_LOG.md).
+
 ## Quick Start
 
 Three terminals from repo root:
@@ -135,6 +178,8 @@ Desktop gesture control is a proof of concept. The core architecture — **VLM-b
 | [Option 2 Risks](docs/OPTION2_RISKS_AND_MITIGATIONS.md) | Teacher-student loop design and safeguards |
 | [Architecture Diagrams](docs/ARCHITECTURE_DIAGRAMS.md) | Visual diagrams for all system flows |
 | [Build Status](docs/STATUS.md) | Current state, priorities, session handoff |
+| [Performance Tracking](docs/COSMOS_PERFORMANCE_TRACKING.md) | Per-iteration Cosmos metrics and category breakdowns |
+| [Prompt Engineering Log](docs/PROMPT_ENGINEERING_LOG.md) | Prompt iteration narrative and lessons learned |
 
 ## License
 
