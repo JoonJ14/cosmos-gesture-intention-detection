@@ -109,11 +109,11 @@ The fix took under 5 minutes: rewrite the system prompt to add gesture descripti
 
 **Targeted per-gesture verification catches category-specific FPs.** Iteration 10 added a CLOSE_MENU-specific check: verify you observed a deliberate palm-to-fist *transition*, not just a hand that ends up closed (catching yawn/rest FPs). NEG_OTHER improved from 86.5% to 97.3%. The lesson: when a specific gesture class generates FPs, describe exactly what distinguishes the intentional version rather than adding general restrictiveness.
 
-### The Hardest Category: Reaches (25% rejection — the fundamental limit)
+### The Hardest Category: Reaches (25% rejection — breaking through)
 
-Reaching for nearby objects remains the hardest category — achieving only 25% rejection even at Iteration 10. Lateral hand displacement during a reach is kinematically indistinguishable from a real swipe in sampled frames. All false positives in this category cluster at confidence 0.70–0.71, improved from 0% for couple iterations, suggesting Cosmos recognizes the ambiguity but cannot resolve it from visual frames alone.
+We were able to achieve 25% rejection for the hardest category that stayed around 0% for multiple iteration cycles. This shows that just by improving the prompt to our reasoning models and iterating, we can start to break through even on the hardest category to detect — the ones that are impossible to hard-code, since their mechanical actions are identical.
 
-This is not a prompt engineering failure — it is the genuine frontier challenge that validates the need for the teacher-student feedback loop. Even a VLM needs ongoing context beyond static frames to distinguish reaches from swipes, which is exactly the use case for the student model learning from Cosmos's labeling over time.
+Lateral hand displacement during a reach is kinematically indistinguishable from a real swipe in sampled frames. All false positives in this category cluster at confidence 0.70–0.71, suggesting Cosmos recognizes the ambiguity but cannot fully resolve it from visual frames alone. This is the genuine frontier challenge that validates the need for the teacher-student feedback loop: even a VLM needs ongoing context beyond static frames, which is exactly the use case for the student model learning from Cosmos's labeling over time.
 
 ### Scalability: Prompt Engineering vs. Retraining
 
