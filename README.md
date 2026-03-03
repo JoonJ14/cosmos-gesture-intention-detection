@@ -78,13 +78,13 @@ Beyond accuracy, Cosmos also delivers **dramatically faster iteration cycles** t
 
 One of Cosmos's most valuable properties isn't just accuracy — it's **iteration speed.** When something goes wrong with a traditional ML classifier, you retrain. With Cosmos, you edit English text. Here's how that played out during development.
 
-### From Near-Zero to 100% TP Recall in 5 Minutes
+### From Near-Zero to 100% TP Recall in Minutes
 
 We evaluated Cosmos against **151 labeled clips** (70 true positives + 81 hard negatives). Our initial prompt was rejection-biased — it listed every motion to reject but never described what an intentional gesture actually looks like. Result: Cosmos rejected nearly everything, including real intentional gestures. **TP recall was ~15%.**
 
 The fix took under 5 minutes: rewrite the system prompt to add gesture descriptions, signs of intentional intent, and a balanced decision guideline. Zero retraining. Zero data pipeline changes. **TP recall went from ~15% to 100%.**
 
-### Five Iterations, ~25 Minutes Total
+### Ten Iterations, ~50 Minutes Total
 
 | Iteration | Change | TP Recall | NEG Rejection | Notes |
 |-----------|--------|-----------|---------------|-------|
@@ -92,17 +92,28 @@ The fix took under 5 minutes: rewrite the system prompt to add gesture descripti
 | 2 | Balanced prompt + gesture descriptions | **100%** | 71.6% | Fixed in < 5 min |
 | 3 | + Gaze direction + yawning awareness | **100%** | 77.8% | Incremental improvement |
 | 4 | + Reach-specific lateral motion guidance | 98.6% ⚠️ | 80.2% | TP regression discovered |
-| 5 | Reverted broad language, kept targeted reach | **100%** | 79.0% | Best with 100% TP recall |
+| 5 | Reverted broad language, kept targeted reach | **100%** | 79.0% | Restored TP recall |
+| 6/6b | Pre-evaluation gaze gates | ~97–99% ⚠️ | N/A | Killed early — pre-gates contaminate |
+| 7 | Post-evaluation sanity check (gaze + reach) | 97.1% ⚠️ | 88.9% | NEG breakthrough; TP regression |
+| 8 | Softened sanity check + arm extension | **100%** | 79.0% | TPs back; NEG gains erased |
+| 9 | Assertive tone + arm extension signals | **100%** | 86.4% | Best 100% TP result |
+| 10 | + CLOSE_MENU transition verification | 98.6% ⚠️ | **90.1%** | **SHIPPED** — first >90% NEG |
 
-### The Tradeoff Discovery
+### Key Discoveries
 
-Iteration 4 revealed a critical precision-recall tradeoff: tightening rejection criteria for reaching motions directly risks rejecting real swipe gestures, because the two motions are **kinematically identical.** We made a principled decision to prioritize TP recall over marginal FP improvement — a missed intentional gesture breaks user trust ("the system doesn't work"), while an occasional false positive is merely annoying. We reverted the harmful language in Iteration 5, restoring 100% TP recall while keeping most of the gains.
+**Pre-evaluation gates contaminate gesture analysis.** Iterations 6 and 6b tested gaze checks placed *before* the gesture evaluation — as a "Step 1: check gaze, then Step 2: evaluate gesture" structure. Both caused TP regression within the first few clips. Any priming that makes Cosmos suspicious before it evaluates the hand motion causes collateral damage on real gestures.
 
-This kind of rapid experimentation, discovery, and rollback is only possible with VLM-based verification. With traditional ML, each cycle would require hours of retraining.
+**Post-evaluation sanity checks work.** Iteration 7 moved the gaze and reach checks to *after* the gesture evaluation as a "FINAL SANITY CHECK" block. NEG rejection jumped from 79.0% to 88.9% — the biggest single-iteration gain in the session. NEG_REACH moved off 0% for the first time. The structural placement matters: evaluate first, reconsider second.
 
-### The Hardest Category
+**Prompt strength has a sharp tradeoff.** Iteration 7's assertive language caused 2 TP misses (swipes rejected). Iteration 8 softened it and recovered all TPs — but erased all NEG gains. There is no simple middle ground. Iteration 9 found the balance: assertive language *plus* richer biomechanical signals (arm extension, spatial zone) that give Cosmos enough information to discriminate correctly.
 
-Reaching for nearby objects remains at 0% rejection — lateral hand displacement during a reach is kinematically indistinguishable from a real swipe in sampled frames. This is the genuine frontier challenge, and it validates the need for the teacher-student feedback loop: even a VLM needs ongoing context beyond static frames.
+**Targeted per-gesture verification catches category-specific FPs.** Iteration 10 added a CLOSE_MENU-specific check: verify you observed a deliberate palm-to-fist *transition*, not just a hand that ends up closed (catching yawn/rest FPs). NEG_OTHER improved from 86.5% to 97.3%. The lesson: when a specific gesture class generates FPs, describe exactly what distinguishes the intentional version rather than adding general restrictiveness.
+
+### The Hardest Category: Reaches (25% rejection — the fundamental limit)
+
+Reaching for nearby objects remains the hardest category — achieving only 25% rejection even at Iteration 10. Lateral hand displacement during a reach is kinematically indistinguishable from a real swipe in sampled frames. All false positives in this category cluster at confidence 0.70–0.71, improved from 0% for couple iterations, suggesting Cosmos recognizes the ambiguity but cannot resolve it from visual frames alone.
+
+This is not a prompt engineering failure — it is the genuine frontier challenge that validates the need for the teacher-student feedback loop. Even a VLM needs ongoing context beyond static frames to distinguish reaches from swipes, which is exactly the use case for the student model learning from Cosmos's labeling over time.
 
 ### Scalability: Prompt Engineering vs. Retraining
 
@@ -112,6 +123,8 @@ Reaching for nearby objects remains at 0% rejection — lateral hand displacemen
 | Add new gesture | Collect data + retrain | Add text description |
 | Add false positive category | Collect negatives + retrain | Add sentence to prompt |
 | Discover tradeoffs | Multiple retrain cycles | Run eval, compare, revert in minutes |
+
+**Final shipped result (Iteration 10):** 98.6% TP recall, 90.1% hard negative rejection across 151 evaluation clips (70 true positives + 81 hard negatives across 6 categories).
 
 For detailed per-iteration metrics and category breakdowns, see [`docs/COSMOS_PERFORMANCE_TRACKING.md`](docs/COSMOS_PERFORMANCE_TRACKING.md) and [`docs/PROMPT_ENGINEERING_LOG.md`](docs/PROMPT_ENGINEERING_LOG.md).
 
