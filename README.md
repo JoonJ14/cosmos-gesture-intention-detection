@@ -114,6 +114,53 @@ We demonstrate Cosmos's value with **8 hard negative scenarios** — motions tha
 
 **Results:** Without Cosmos, the state machine fires on all candidate motions including incidental ones (0% rejection). With Cosmos verification, 90.1% of hard negatives are correctly rejected (73/81 across 6 negative categories). The hardest category (reaching motions) achieves 25% rejection — these are kinematically identical to real swipes and represent the genuine frontier of VLM-based discrimination.
 
+### The Scalability Problem
+
+Traditional hard-coded approaches require engineering negative-case rules for every gesture independently. Each new gesture multiplies the rules needed:
+
+**Approach 1: Hard-Coded Negative Rules (Not Scalable)**
+```
+Gesture 1   Gesture 2   Gesture 3   Gesture N
+   │            │            │           │
+   ▼            ▼            ▼           ▼
+┌────────┐  ┌────────┐  ┌────────┐  ┌────────┐
+│neg rule│  │neg rule│  │neg rule│  │neg rule│
+│neg rule│  │neg rule│  │neg rule│  │neg rule│
+│neg rule│  │neg rule│  │neg rule│  │neg rule│
+│neg rule│  │neg rule│  │neg rule│  │  ....  │
+│  ....  │  │  ....  │  │  ....  │  │  ....  │
+└────────┘  └────────┘  └────────┘  └────────┘
+
+Rules grow O(N × M) — N gestures × M negative cases each.
+Adding gesture N+1 means engineering an entirely new set of rules.
+```
+
+**Approach 2: Cosmos Reason 2 as Intent Verifier (Scalable)**
+```
+Gesture 1   Gesture 2   Gesture 3   Gesture N
+   │            │            │           │
+   └────────────┴─────┬──────┴───────────┘
+                      │
+                      ▼
+        ┌───────────────────────────┐
+        │  Student Model (local)    │  ← Fast, <10ms
+        │  Trained on Cosmos labels │
+        └─────────────┬─────────────┘
+                      │
+                      ▼
+        ┌───────────────────────────┐
+        │  Cosmos Reason 2 (VLM)    │  ← Reads intent, not mechanics
+        │  Single prompt covers     │
+        │  ALL gestures + negatives │
+        └───────────────────────────┘
+
+One model handles everything. Adding gesture N+1 = one sentence in the prompt.
+```
+
+Adding gesture N+1 means adding one sentence to the prompt. Cosmos reasons about *intent* — whether the user meant to issue a command — rather than pattern-matching against a growing library of exceptions. This applies beyond gestures to any domain where distinguishing intentional actions from incidental motion is the core challenge: robotics safety, automotive controls, smart home, AR/VR input.
+
+The student model solves the latency problem: Cosmos labels events during normal use (5.8–8.4s), and the student learns to replicate those decisions locally in <10ms.
+
 Beyond accuracy, Cosmos also delivers **dramatically faster iteration cycles** than traditional ML — a prompt change can be validated in minutes rather than after hours of retraining. See [Rapid Iteration via Prompt Engineering](#rapid-iteration-via-prompt-engineering) below.
 
 ## Rapid Iteration via Prompt Engineering
