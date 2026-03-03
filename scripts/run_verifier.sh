@@ -9,4 +9,4 @@ source .venv/bin/activate
 pip install setuptools
 pip install --no-build-isolation -e .
 
-uvicorn verifier.main:app --host 127.0.0.1 --port 8788 --reload
+uvicorn verifier.main:app --host 0.0.0.0 --port 8788 --reload

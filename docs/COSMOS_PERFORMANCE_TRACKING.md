@@ -170,6 +170,140 @@ NEG_STRETCH regressed from 100% (Iter 3) to 80%, with one stretch clip misclassi
 
 ---
 
+## Iteration 6: Gaze Pre-Gate + Reach Language in Step 2
+
+**Prompt changes:**
+1. Restructured prompt with a two-step evaluation framework: Step 1 checks head/face engagement as a hard gate before evaluating hand motion; Step 2 adds note that swipe commands are compact lateral motions, not arm extensions toward objects.
+
+**Result:** Killed early — TP regression on SWITCH_RIGHT (clips 6 and 7 rejected). The reach vs. swipe language in Step 2 contaminated swipe evaluation, the same pattern as Iteration 4.
+
+| Metric | Value |
+|--------|-------|
+| TP Recall | ~97% (killed early, not full run) |
+| Hard Negative Rejection | N/A (incomplete) |
+| Status | **Reverted — reach/swipe discriminator language consistently causes TP regression** |
+
+**Decision:** Reverted. Reach/swipe discriminator language in the evaluation path causes TP regression regardless of where it is placed.
+
+---
+
+## Iteration 6b: Gaze Pre-Gate Only (No Reach Language)
+
+**Prompt changes:**
+1. Same gaze engagement gate as Iter 6 but removed ALL reach/swipe language from Step 2. Only the pre-gate: check head/face orientation before evaluating hand motion.
+
+**Result:** Killed early — still 1 TP regression (clip 7, SWITCH_RIGHT rejected). Even the gaze gate alone, placed before hand evaluation, primes Cosmos to be suspicious of swipes.
+
+| Metric | Value |
+|--------|-------|
+| TP Recall | ~98.6% (killed early) |
+| Hard Negative Rejection | N/A (incomplete) |
+| Status | **Reverted — pre-evaluation gates of any kind contaminate hand motion analysis** |
+
+**Decision:** Reverted. Anything that primes Cosmos to be suspicious *before* it evaluates the hand motion causes collateral damage on real gestures.
+
+---
+
+## Iteration 7: Post-Evaluation Gaze + Reach Destination Sanity Check
+
+**Prompt changes:**
+1. Instead of a pre-gate, added a "FINAL SANITY CHECK" block *after* the main evaluation: (1) Is person facing screen? If head turned away, reconsider and lower confidence. (2) Is hand moving toward a specific visible object? Gesture commands are performed in open space without a physical destination.
+
+**Result:** Full run completed.
+
+| Category | Iter 5 | Iter 7 | Change |
+|----------|--------|--------|--------|
+| NEG_HEAD_SCRATCH | 89.5% (17/19) | **100% (19/19)** | ✅ +10.5% |
+| NEG_WAVE | 100% (8/8) | **100% (8/8)** | — |
+| NEG_PHONE | 100% (4/4) | **100% (4/4)** | — |
+| NEG_STRETCH | 80% (4/5) | **100% (5/5)** | ✅ +20% |
+| NEG_OTHER | 83.8% (31/37) | **91.9% (34/37)** | ✅ +8.1% |
+| NEG_REACH | 0% (0/8) | **25% (2/8)** | ✅ First progress |
+| **Overall** | **79.0%** | **88.9% (72/81)** | **+9.9%** |
+
+**⚠️ TP Recall: 97.1% (68/70) — 2 SWITCH_RIGHT misses (clips 28 and 40)**
+
+**Key insight:** Post-evaluation sanity checks work where pre-gates don't. Cosmos evaluates the hand motion uncontaminated first, then reconsiders. The massive NEG jump (+9.9%) and first-ever REACH progress (25%) confirm the approach. But the assertive "reconsider your assessment" language was strong enough to override 2 confident TP swipe matches.
+
+**Decision:** Not shipped due to TP regression. Established the post-evaluation sanity check as the correct structural approach.
+
+---
+
+## Iteration 8: Softened Sanity Check + Arm Extension Signals
+
+**Prompt changes:**
+1. Softened the Iter 7 sanity check language: added "do not let them override a strong gesture match" and "only change your assessment if the gesture match was already weak or ambiguous."
+2. Added arm extension / spatial zone signals to the reach check: elbow straightening, hand moving outside the torso area.
+
+**Result:** Full run completed.
+
+| Category | Iter 7 | Iter 8 | Change |
+|----------|--------|--------|--------|
+| NEG_HEAD_SCRATCH | 100% (19/19) | 89.5% (17/19) | ❌ -10.5% |
+| NEG_WAVE | 100% (8/8) | 87.5% (7/8) | ❌ -12.5% |
+| NEG_PHONE | 100% (4/4) | **100% (4/4)** | — |
+| NEG_STRETCH | 100% (5/5) | **100% (5/5)** | — |
+| NEG_OTHER | 91.9% (34/37) | 81.1% (30/37) | ❌ -10.8% |
+| NEG_REACH | 25% (2/8) | 12.5% (1/8) | ❌ -12.5% |
+| **Overall** | **88.9%** | **79.0% (64/81)** | **-9.9%** |
+
+**TP Recall: 100% (70/70) ✅ — TPs recovered**
+
+**Key insight:** The softened "do not override" language was too permissive — Cosmos stopped applying the sanity check to any case, erasing all NEG gains from Iter 7. Confirmed a clear tradeoff: strong sanity check = high NEG but TP regression; soft sanity check = safe TPs but no NEG improvement. There is no middle ground with simple prompt softening.
+
+**Decision:** Not shipped. Clearly demonstrated the prompt strength tradeoff.
+
+---
+
+## Iteration 9: Assertive Tone + Arm Extension Signals
+
+**Prompt changes:**
+1. Combined Iter 7's assertive tone with Iter 8's arm extension signals: "reconsider your assessment and lower your confidence" (assertive, matching Iter 7) plus the biomechanical reach signals (elbow straightening, spatial zone, hand moving toward an object destination).
+2. Final sentence: "strongly favor classifying as NOT intentional unless the gesture pattern match is exceptionally clear and unambiguous."
+
+**Result:** Full run completed.
+
+| Category | Iter 7 | Iter 8 | Iter 9 | Change vs Iter 7 |
+|----------|--------|--------|--------|------------------|
+| NEG_HEAD_SCRATCH | 100% | 89.5% | **100% (19/19)** | ✅ Restored |
+| NEG_WAVE | 100% | 87.5% | **100% (8/8)** | ✅ Restored |
+| NEG_PHONE | 100% | 100% | **100% (4/4)** | — |
+| NEG_STRETCH | 100% | 100% | **100% (5/5)** | — |
+| NEG_OTHER | 91.9% | 81.1% | 86.5% (32/37) | ❌ -5.4% — 5 FPs, all CLOSE_MENU at conf=0.74 |
+| NEG_REACH | 25% | 12.5% | **25% (2/8)** | ✅ Restored |
+| **Overall** | **88.9%** | **79.0%** | **86.4% (70/81)** | -2.5% vs Iter 7 |
+
+**TP Recall: 100% (70/70) ✅**
+
+**Key insight:** The arm extension biomechanical signals allowed assertive language without the TP regression seen in Iter 7. The 5 remaining NEG_OTHER FPs were all classified as CLOSE_MENU — hands ending in fist-like positions from yawning/resting, not deliberate palm-to-fist transitions. This pointed directly at the next iteration.
+
+**Decision:** Strong candidate. Tried one more iteration targeting the CLOSE_MENU FPs specifically.
+
+---
+
+## Iteration 10: CLOSE_MENU Transition Verification ← SHIPPED
+
+**Prompt changes:**
+1. Added a third point to the FINAL SANITY CHECK: "If you are about to classify the motion as CLOSE_MENU, verify that you observed a clear deliberate transition from an open palm to a closed fist. Many everyday motions involve a hand lowering, closing, or coming to rest in a fist-like shape (yawning, stretching, resting hands) — these are not CLOSE_MENU. The key indicator is a visible, deliberate palm-to-fist closure performed as a distinct action."
+
+**Result:** Full run completed. **This is the shipped prompt.**
+
+| Category | Iter 9 | Iter 10 | Change |
+|----------|--------|---------|--------|
+| NEG_HEAD_SCRATCH | 100% (19/19) | **100% (19/19)** | — |
+| NEG_WAVE | 100% (8/8) | 87.5% (7/8) | ❌ -12.5% (1 FP as SWITCH_LEFT) |
+| NEG_PHONE | 100% (4/4) | **100% (4/4)** | — |
+| NEG_STRETCH | 100% (5/5) | **100% (5/5)** | — |
+| NEG_OTHER | 86.5% (32/37) | **97.3% (36/37)** | ✅ +10.8% — caught 4 of 5 CLOSE_MENU FPs |
+| NEG_REACH | 25% (2/8) | **25% (2/8)** | — |
+| **Overall** | **86.4%** | **90.1% (73/81)** | **+3.7%** |
+
+**⚠️ TP Recall: 98.6% (69/70) — 1 SWITCH_RIGHT miss (clip 040)**
+
+**Decision:** Shipped. Best overall performance across 10 iterations. The 1 TP miss is acceptable (user retries the gesture), while 90.1% NEG rejection provides the cleanest training data for the student model. First iteration to exceed 90% overall NEG rejection.
+
+---
+
 ## Iteration History Summary
 
 | Iteration | Change | TP Recall | NEG Rejection | Notes |
@@ -180,6 +314,12 @@ NEG_STRETCH regressed from 100% (Iter 3) to 80%, with one stretch clip misclassi
 | 3 | + Gaze direction + yawning awareness | **100%** | 77.8% | Gaze + yawn helped |
 | 4 | + Reach-specific lateral motion guidance | 98.6% ⚠️ | 80.2% | TP regression — too aggressive |
 | 5 | Reverted broad language, kept targeted reach | **100%** | 79.0% | Best with 100% TP recall |
+| 6 | Pre-evaluation gaze gate + reach/swipe Step 2 | ~97% ⚠️ | N/A | Killed early — TP regression |
+| 6b | Pre-evaluation gaze gate only | ~98.6% ⚠️ | N/A | Killed early — TP regression |
+| 7 | Post-evaluation sanity check (gaze + reach destination) | 97.1% ⚠️ | 88.9% | NEG breakthrough; TP regression |
+| 8 | Softened sanity check + arm extension | **100%** | 79.0% | TPs back; NEG gains erased |
+| 9 | Assertive tone + arm extension signals | **100%** | 86.4% | Best 100% TP result |
+| 10 | + CLOSE_MENU transition verification | 98.6% ⚠️ | 90.1% | **SHIPPED** — first >90% NEG |
 
 *Each iteration takes minutes, not hours. This is the core advantage of VLM-based verification over traditional ML retraining.*
 
@@ -187,11 +327,11 @@ NEG_STRETCH regressed from 100% (Iter 3) to 80%, with one stretch clip misclassi
 
 ## Remaining Challenges
 
-### NEG_REACH (0% rejection — hardest category)
-Reaching across a desk produces lateral hand displacement that is kinematically identical to a swipe gesture. Despite gaze direction hints and targeted reach descriptions, Cosmos cannot distinguish the two from 8 sampled frames alone. All false positives in this category have low confidence (0.56-0.69), suggesting Cosmos recognizes ambiguity but leans toward approval. This is arguably the genuine frontier challenge that validates the need for the teacher-student feedback loop — even a VLM needs additional context beyond static frames.
+### NEG_REACH (25% rejection — hardest category)
+Reaching across a desk produces lateral hand displacement that is kinematically identical to a swipe gesture. Despite gaze direction hints, arm extension signals, and spatial zone guidance, Cosmos correctly rejects only 2 of 8 reach clips. All false positives in this category have low confidence (0.56–0.69), suggesting Cosmos recognizes the ambiguity but leans toward approval. This is the genuine frontier challenge that validates the need for the teacher-student feedback loop — even a VLM needs additional context beyond static frames to distinguish reaches from swipes.
 
-### NEG_OTHER → CLOSE_MENU (6 remaining clips)
-These are yawning clips where hands come down in a fist-like position, resembling the palm→fist transition of CLOSE_MENU. Reduced from 9 (Iter 2) to 7 (Iter 3) to 6 (Iter 4-5) through prompt improvements.
+### NEG_WAVE → SWITCH_LEFT (1 remaining clip)
+One wave clip is persistently classified as SWITCH_LEFT across iterations. The lateral hand motion during a conversational wave is near-identical to the swipe command trajectory. This is the same kinematic equivalence problem as NEG_REACH.
 
 ### Confidence Threshold Considerations
-Once prompt iterations plateau, the next lever is confidence thresholds for student model training. Current analysis suggests lowering from 0.75 to 0.60-0.65 to preserve more training data, as most TP decisions fall in the 0.44-0.78 range while most FP decisions are below 0.75.
+Once prompt iterations plateau, the next lever is confidence thresholds for student model training. Current analysis suggests lowering from 0.75 to 0.60–0.65 to preserve more training data, as most TP decisions fall in the 0.44–0.78 range while most FP decisions are below 0.75.
