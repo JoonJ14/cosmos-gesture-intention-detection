@@ -72,6 +72,25 @@
         width: 240px;
       }
 
+      select {
+        background: #0b1220;
+        color: var(--fg);
+        border: 1px solid #334155;
+        border-radius: 6px;
+        padding: 6px 8px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      .mode-label {
+        color: var(--fg);
+        font-weight: 600;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
       .video-shell {
         position: relative;
         width: 100%;
@@ -283,6 +302,13 @@
     <main class="app">
       <section class="panel controls">
         <div class="controls-row">
+          <label class="mode-label">
+            Mode
+            <select id="demoMode">
+              <option value="intelligent" selected>Intelligent (Student + Cosmos)</option>
+              <option value="state-machine">State Machine Only</option>
+            </select>
+          </label>
           <label>
             <input id="safeModeToggle" type="checkbox" checked />
             Safe Mode (observe only)

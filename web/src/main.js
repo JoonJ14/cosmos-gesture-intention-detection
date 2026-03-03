@@ -30,11 +30,14 @@ import {
 const videoElement         = document.getElementById("video");
 const overlayElement       = document.getElementById("overlay");
 const safeModeToggle       = document.getElementById("safeModeToggle");
+const demoModeSelect       = document.getElementById("demoMode");
 const verifierTimeoutInput = document.getElementById("verifierTimeoutMs");
 const verifierUrlInput     = document.getElementById("verifierUrl");
 const studentUrlInput      = document.getElementById("studentUrl");
 const statusElement        = document.getElementById("status");
 const studentStatusElement = document.getElementById("studentStatus");
+
+function isStateMachineOnly() { return demoModeSelect.value === "state-machine"; }
 
 // Initialize verifier URL input from query param or default, then keep in sync.
 verifierUrlInput.value = getVerifierBaseUrl();
@@ -431,6 +434,41 @@ function fireSafeModeVerify(event) {
 async function processEvent(event) {
   let approvedIntent = event.intent;
   let stage = "runtime";
+
+  // ── State Machine Only mode: bypass student and Cosmos entirely ──────────────
+  if (isStateMachineOnly()) {
+    updateStudentStatus("disabled (State Machine Only)");
+    if (event.safe_mode) {
+      setStatus(`State Machine: ${event.intent} detected (observe only)`, "warn");
+      setPolicyPath(event, "state_machine_observe");
+      setEventState(event, EVENT_STATES.REJECTED);
+      emitTerminalEventLog(event, nowMs());
+      return;
+    }
+    setEventState(event, EVENT_STATES.APPROVED);
+    setPolicyPath(event, "state_machine_direct");
+    if (shouldBlockExecution(event)) return;
+    try {
+      event.timestamps.exec_send_ms = nowMs();
+      await callExecutor({
+        event_id: event.event_id,
+        intent:   event.intent,
+        source:   "web",
+        dry_run:  false,
+      });
+      event.timestamps.exec_recv_ms = nowMs();
+      setEventState(event, EVENT_STATES.EXECUTED);
+      setStatus(`State Machine: executed ${event.intent}`, "ok");
+      emitTerminalEventLog(event, event.timestamps.exec_recv_ms);
+    } catch (error) {
+      if (event.timestamps.exec_recv_ms === null) event.timestamps.exec_recv_ms = nowMs();
+      setPolicyPath(event, "executor_error");
+      setEventState(event, EVENT_STATES.REJECTED);
+      setStatus(`State Machine: error — ${error.message}`, "bad");
+      emitTerminalEventLog(event, nowMs());
+    }
+    return;
+  }
 
   // ── Student prediction (fire-and-forget with 500ms timeout) ─────────────────
   // Fails gracefully: unavailable service or timeout → always execute.
