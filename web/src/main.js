@@ -51,8 +51,9 @@ studentUrlInput.addEventListener("change", (e) => {
   setStudentBaseUrl(e.target.value.trim());
 });
 
-function updateStudentStatus(message) {
-  studentStatusElement.textContent = `Student: ${message}`;
+function updateStudentStatus(message, modelType = null) {
+  const prefix = modelType ? `Student (${modelType})` : "Student";
+  studentStatusElement.textContent = `${prefix}: ${message}`;
 }
 
 // ─── Recording timer and preview intervals ────────────────────────────────────
@@ -489,8 +490,9 @@ async function processEvent(event) {
     // Student verdict appears immediately; Cosmos verdict overwrites when it arrives.
     const action  = sp.execute ? "execute" : "suppress";
     const confStr = sp.model_version ? ` (${sp.confidence.toFixed(2)})` : "";
-    setStatus(`Student: ${action} ${event.intent}${confStr}`, "ok");
-    updateStudentStatus(`${action} ${event.intent}${confStr}`);
+    const mtStr   = sp.model_type ? ` (${sp.model_type})` : "";
+    setStatus(`Student${mtStr}: ${action} ${event.intent}${confStr}`, "ok");
+    updateStudentStatus(`${action} ${event.intent}${confStr}`, sp.model_type);
 
     setPolicyPath(event, "safe_mode_observe");
     setEventState(event, EVENT_STATES.REJECTED);
@@ -504,7 +506,7 @@ async function processEvent(event) {
     ? `${sp.execute ? "EXECUTE" : "SUPPRESS"} (${sp.confidence.toFixed(2)}) ${sp.model_version} [${sp.mode}]`
     : "no model";
   console.log(`[STUDENT] ${studentStr}`);
-  updateStudentStatus(studentStr);
+  updateStudentStatus(studentStr, sp.model_type);
 
   // Active-mode suppression: only if a real model exists and student says suppress
   if (sp.model_version !== null && !sp.execute) {

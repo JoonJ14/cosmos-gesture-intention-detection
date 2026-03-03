@@ -24,9 +24,10 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-REPO_ROOT   = Path(__file__).resolve().parents[1]
-MODEL_PATH  = REPO_ROOT / "models" / "student" / "current_model.joblib"
-STUDENT_MODE = os.environ.get("STUDENT_MODE", "shadow")
+REPO_ROOT          = Path(__file__).resolve().parents[1]
+MODEL_PATH         = REPO_ROOT / "models" / "student" / "current_model.joblib"
+TRAINING_LOG_PATH  = REPO_ROOT / "models" / "student" / "training_log.json"
+STUDENT_MODE       = os.environ.get("STUDENT_MODE", "shadow")
 
 FEATURE_NAMES = [
     "swipeDisplacement", "swipeDuration", "peakVelocity",
@@ -39,16 +40,18 @@ GESTURE_TYPES = ["OPEN_MENU", "CLOSE_MENU", "SWITCH_RIGHT", "SWITCH_LEFT"]
 _model         = None
 _model_mtime   = None
 _model_version = None
+_model_type    = None
 _total_preds   = 0
 
 
 def _load_model_if_needed():
     """Hot-reload model when the file changes on disk."""
-    global _model, _model_mtime, _model_version
+    global _model, _model_mtime, _model_version, _model_type
     if not MODEL_PATH.exists():
         _model = None
         _model_mtime = None
         _model_version = None
+        _model_type = None
         return
     mtime = MODEL_PATH.stat().st_mtime
     if _model is None or mtime != _model_mtime:
@@ -60,7 +63,12 @@ def _load_model_if_needed():
             _model         = data
             _model_version = "v?"
         _model_mtime = mtime
-        print(f"[student] loaded model version {_model_version}", flush=True)
+        try:
+            log = json.loads(TRAINING_LOG_PATH.read_text())
+            _model_type = log[-1].get("model_type") if log else None
+        except Exception:
+            _model_type = None
+        print(f"[student] loaded model version {_model_version} ({_model_type})", flush=True)
 
 
 def _features_to_vector(features: dict, gesture_type: str) -> np.ndarray:
@@ -81,7 +89,7 @@ def predict():
     if _model is None:
         return jsonify({
             "execute": True, "confidence": 0.0,
-            "model_version": None, "mode": STUDENT_MODE,
+            "model_version": None, "model_type": None, "mode": STUDENT_MODE,
         })
 
     x    = _features_to_vector(features, gesture_type)
@@ -98,6 +106,7 @@ def predict():
         "execute":       execute,
         "confidence":    round(conf, 3),
         "model_version": _model_version,
+        "model_type":    _model_type,
         "mode":          STUDENT_MODE,
     })
 
