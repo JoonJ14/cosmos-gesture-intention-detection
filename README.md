@@ -4,6 +4,8 @@
 
 > NVIDIA Cosmos Cookoff 2026 Submission
 
+> 📹 [Demo Video — Coming Soon]
+
 ## The Problem
 
 Gesture-based computer interaction has a fundamental unsolved problem: **false positives from incidental motion.**
@@ -23,6 +25,30 @@ The architecture follows the **Event Reviewer pattern:**
 3. **Action execution** — Only verified intentional commands trigger OS actions (workspace switching, Mission Control)
 
 Cosmos earns its role by solving what heuristics fundamentally cannot: distinguishing a deliberate lateral swipe from someone scratching their head, catching a fly, or waving during conversation.
+
+## Results
+
+Evaluated against 151 labeled clips (70 true positives + 81 hard negatives across 6 negative categories), trained and running on real usage sessions.
+
+**Cosmos Intent Verification:**
+
+| Metric | Result |
+|--------|--------|
+| TP Recall | 98.6% (69/70) |
+| Hard Negative Rejection | 90.1% (73/81) |
+| Prompt iterations to ship | 10 (~50 min total engineering time) |
+| Inference latency | 5.8–8.4s per verification |
+
+**Student Model (trained on Cosmos-labeled live data):**
+
+| Metric | Result |
+|--------|--------|
+| Accuracy | 88.2% (RandomForest, scikit-learn) |
+| Training samples | 380 (real usage sessions, labeled by Cosmos) |
+| Features | 16 (12 MediaPipe numeric + 4 one-hot gesture type) |
+| Inference latency | <10ms |
+
+**Key takeaway:** Cosmos provides high-accuracy intent verification. The student model learns from Cosmos labels to deliver near-real-time decisions, achieving a 500–800x speedup while maintaining strong accuracy.
 
 ## Architecture
 
@@ -86,7 +112,7 @@ We demonstrate Cosmos's value with **8 hard negative scenarios** — motions tha
 | Reaching | Wipe monitor, reach to side, catch a fly | Same displacement and velocity |
 | Conversation | Wave while talking, receive item from someone | Same hand shape and motion |
 
-**Key metric:** False positive rate on hard negatives — baseline (local only) vs. with Cosmos verification.
+**Results:** Without Cosmos, the state machine fires on all candidate motions including incidental ones (0% rejection). With Cosmos verification, 90.1% of hard negatives are correctly rejected (73/81 across 6 negative categories). The hardest category (reaching motions) achieves 25% rejection — these are kinematically identical to real swipes and represent the genuine frontier of VLM-based discrimination.
 
 Beyond accuracy, Cosmos also delivers **dramatically faster iteration cycles** than traditional ML — a prompt change can be validated in minutes rather than after hours of retraining. See [Rapid Iteration via Prompt Engineering](#rapid-iteration-via-prompt-engineering) below.
 
@@ -146,15 +172,24 @@ For detailed per-iteration metrics and category breakdowns, see [`docs/COSMOS_PE
 
 ## Quick Start
 
-Three terminals from repo root:
+Four terminals from repo root:
 
 ```bash
 ./scripts/run_executor.sh   # Port 8787 — OS key injection
-./scripts/run_verifier.sh   # Port 8788 — Cosmos verification (stub for now)
+./scripts/run_verifier.sh   # Port 8788 — Cosmos intent verification
+./scripts/run_student.sh    # Port 8789 — Student ML model
 ./scripts/run_web.sh        # Port 5173 — open in browser
 ```
 
-Open `http://127.0.0.1:5173`, allow webcam access. Press keys `1`–`4` to test intent proposals. Toggle **Safe Mode** to route through the verifier.
+Open the web app with service connections:
+
+```
+http://localhost:5173/?verifier=http://<DGX_IP>:8788&student=http://localhost:8789
+```
+
+Allow webcam access. Toggle **Safe Mode** (observe only) to see both Student and Cosmos decisions side by side without executing gestures. Uncheck for normal operation where verified gestures execute immediately.
+
+**Note:** The verifier requires a running Cosmos Reason 2 instance via vLLM on the DGX Spark. Without it, the verifier falls back to a stub that approves all gestures. Set `NIM_ENABLED=1` environment variable to enable real Cosmos verification.
 
 ### Platform requirements
 
@@ -174,14 +209,26 @@ Open `http://127.0.0.1:5173`, allow webcam access. Press keys `1`–`4` to test 
 
 ## Teacher-Student Feedback Loop
 
-The gesture state machine is intentionally **high-recall / low-precision**: it fires on many candidate gestures, including false positives. Cosmos acts as the **teacher**, labeling every proposal with ground-truth intent via visual reasoning. A lightweight local **student classifier** (logistic regression or small random forest) trains on those labels and takes over filtering in real time.
+The gesture state machine is intentionally **high-recall / low-precision**: it fires on many candidate gestures, including false positives. Cosmos acts as the **teacher**, labeling every proposal with ground-truth intent via visual reasoning. A lightweight local **student classifier** trains on those labels and takes over filtering in real time.
+
+**Phase 1 is fully operational.** The student model is trained and running:
+
+| | |
+|---|---|
+| Model | RandomForest (scikit-learn) |
+| Test accuracy | 88.2% |
+| Training samples | 380 live events labeled by Cosmos during real usage sessions |
+| Features | 12 numeric MediaPipe features (swipe displacement, finger counts, wrist velocity, palm orientation, etc.) + 4 one-hot gesture type encodings |
+| Student inference | <10ms vs. Cosmos 5.8–8.4s (500–800x speedup) |
+
+The pipeline is fully automated: `build_calibration.py` aggregates Cosmos-labeled events from `verifier/logs/verifier_events.jsonl` → `train_student.py` trains and saves the model → the student service hot-reloads on the next request. Safe mode (observe only) shows both Student and Cosmos decisions side by side in real time for comparison.
 
 **Three phases:**
-1. **Phase 1** — 100% of proposals go to Cosmos for labeling
-2. **Phase 2** — When student-Cosmos agreement exceeds 90%, reduce sampling to ~50%
-3. **Phase 3** — When agreement exceeds 95%, spot-check only (10–20%)
+1. **Phase 1** *(current)* — 100% of proposals go to Cosmos for labeling; student runs in parallel for comparison
+2. **Phase 2** — When student-Cosmos agreement exceeds 90%, reduce Cosmos sampling to ~50%
+3. **Phase 3** — When agreement exceeds 95%, spot-check only (10–20%); student handles the rest
 
-A small random percentage always goes to Cosmos (never 0%) to detect student blind spots.
+Phase 2 and 3 are designed but not yet activated — requires more training data and sustained agreement rates above threshold. A small random percentage will always go to Cosmos (never 0%) to detect student blind spots.
 
 See [Teacher-Student Loop Design & Risks](docs/OPTION2_RISKS_AND_MITIGATIONS.md) for the full design, failure modes, and safeguards.
 
@@ -212,4 +259,4 @@ Desktop gesture control is a proof of concept. The core architecture — **VLM-b
 
 ## License
 
-Apache 2.0
+MIT

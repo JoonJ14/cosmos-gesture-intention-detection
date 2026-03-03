@@ -55,16 +55,16 @@ Four intents, two command families:
 ### Menu control
 | Intent | Gesture | Description |
 |--------|---------|-------------|
-| `OPEN_MENU` | Palm spread | Open palm with five fingers extended and spread, held deliberately facing camera for ≥0.3s |
-| `CLOSE_MENU` | Palm close | Open palm transitions into a closed fist deliberately |
+| `OPEN_MENU` | Fist → palm | Make a fist (≤3 fingers extended), hold ≥50ms, then open hand (≥3 fingers + palm facing camera), hold stable ≥150ms |
+| `CLOSE_MENU` | Palm → fist | Hold open palm (≥3 fingers + palm facing) ≥150ms, then close to fist (≤3 fingers) while still in frame, hold fist ≥75ms |
 
 ### Workspace switching
 | Intent | Gesture | Description |
 |--------|---------|-------------|
-| `SWITCH_RIGHT` | Right-hand swipe | Right hand moves right→left (x decreases) by ≥30% frame width within 0.4–0.9s |
-| `SWITCH_LEFT` | Left-hand swipe | Left hand moves left→right (x increases) by ≥30% frame width within 0.4–0.9s |
+| `SWITCH_RIGHT` | Swipe left on screen | Either hand; wrist moves rightward in raw camera coords (x increases); selfie-mirror view means this appears as rightward motion on screen |
+| `SWITCH_LEFT` | Swipe right on screen | Either hand; wrist moves leftward in raw camera coords (x decreases) |
 
-Additional gestures may be added if these four are stable.
+Swipes are **pose-agnostic** — any hand shape works. Minimum 7% Euclidean displacement, 40% lateral component, peak velocity ≥0.03, within 0.05–2.0s window. Both hands can trigger either direction.
 
 ## Hard negative scenarios
 
@@ -119,17 +119,17 @@ Configurable via `executor/actions.yaml`.
 - `SWITCH_RIGHT` → `Ctrl+Right`
 - `SWITCH_LEFT` → `Ctrl+Left`
 
-## Option 2: teacher-student feedback loop (stretch goal)
+## Teacher-student feedback loop (operational)
 
-After the core system (Option 1) is working, the architecture supports a continuous improvement loop:
+The architecture supports — and has implemented — a continuous improvement loop:
 
-1. Local gesture proposer detects gestures and assigns confidence
-2. Ambiguous cases are sent to Cosmos for verification (already happens in Option 1)
-3. All events (proposals, Cosmos labels, outcomes) are logged as JSONL
-4. Periodically, a lightweight student classifier (logistic regression or small MLP on landmark features) is trained on Cosmos-labeled data
-5. The student model replaces or augments the rule-based thresholds
-6. Over time, the local model improves and fewer Cosmos calls are needed
+1. Local gesture state machine detects candidates and assigns confidence
+2. All proposals are sent to Cosmos for async verification (training label generation)
+3. All events are logged to `verifier/logs/verifier_events.jsonl` with a shared `event_id`
+4. `build_calibration.py` aggregates Cosmos-labeled events; `train_student.py` trains a RandomForest classifier
+5. The student model provides real-time execute/suppress decisions (<10ms inference)
+6. Safe mode (observe only) shows Student and Cosmos decisions side by side for comparison
 
-**Cosmos is the teacher, not the student.** We never fine-tune Cosmos. We train a small local model on Cosmos's labels. The JSONL logging throughout the codebase exists specifically to enable this loop.
+**Current status (Phase 1 operational):** 100% of proposals go to Cosmos for labeling. Student model (88.2% accuracy, 380 training samples) runs in parallel. Phase 2 (50% Cosmos sampling at 90% agreement) and Phase 3 (10–20% spot-check at 95% agreement) are designed but not yet activated.
 
-This is optional for the competition but is the intended long-term architecture. See `docs/OPTION2_RISKS_AND_MITIGATIONS.md` for failure modes and safeguards.
+**Cosmos is the teacher, not the student.** We never fine-tune Cosmos. We train a small local model on Cosmos's labels. See `docs/OPTION2_RISKS_AND_MITIGATIONS.md` for the full design, failure modes, and safeguards.

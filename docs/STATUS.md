@@ -10,13 +10,66 @@
 
 ## Session handoff note
 
-**Last updated**: 2026-03-01 (end of day — full build complete).
+**Last updated**: 2026-03-03 (submission prep — all core tasks complete).
 
-**Current state**: Everything is built. The full teacher-student pipeline exists end-to-end: gesture detection fires proposals → student classifies in real time → Cosmos labels async → training script retrains student. Eval recording infrastructure is live in the web app (R key opens panel, Space bar cycles READY→RECORDING→CAPTURED, A key auto-captures). Standalone clip review viewer at `web/review.html`. All swipe false-positive fixes are in (x-displacement gate, vertical motion origin reset, suppression narrowed to PALM_OPENED/FIST_SEEN, cooldown 1200ms).
+> **Note:** The detailed session log below covers 2026-03-01. The March 2 session completed all remaining tasks: DGX woken, Cosmos eval run on 151 clips (98.6% TP recall, 90.1% hard negative rejection), student model trained (v4/v5, 88.2% accuracy on 380 live samples), swipe detection further tuned (uprightness gate, palm orientation gate, last-frame fire, DEBUG_GESTURES flag), README fully updated. **Deadline: March 5, 2026 (2 days remaining).**
 
-**Blocker**: DGX Spark at 192.168.1.250 was unreachable tonight — needs physical access to wake it up. Nothing else is blocking. All Mac-side services are ready to run.
+**Current state (2026-03-03)**: Full system operational. All four services running. Student model v5 deployed. Safe mode relabeled "observe only". `build_calibration.py` wired to both eval clips and live verifier logs (`verifier_events.jsonl`). Cosmos performance: 98.6% TP recall, 90.1% hard negative rejection across 151 clips. Student: 88.2% accuracy (380 samples), <10ms inference.
 
-**Tomorrow's exact plan** (priority order — see section below).
+**Remaining before submission:**
+- [ ] Accumulate NEG data in safe mode → retrain student v6
+- [ ] Update README with student model progression table
+- [ ] Demo video (under 3 min)
+- [ ] Submit via GitHub issue using Cosmos Cookoff template
+
+---
+
+## What was done this session (2026-03-03)
+
+### README updated for submission
+- Added `## Results` section immediately after "The Solution" — two tables (Cosmos verification + Student model) with key metrics, visible in first scroll for judges
+- Updated Teacher-Student section to reflect Phase 1 fully operational (was theoretical)
+- Fixed Quick Start: 4 services, connection URL with query params, safe mode description, NIM_ENABLED note; removed "stub for now" and key 1-4 references
+- Added `> 📹 [Demo Video — Coming Soon]` placeholder after cookoff byline
+- Fixed license: Apache 2.0 → MIT (matches actual LICENSE file)
+- Updated "Why Cosmos Is Necessary" key metric sentence with actual rejection numbers
+
+### All 6 docs audited and corrected
+Reviewed every file in `docs/`. Changes made:
+- **GESTURE_DETECTION.md**: all threshold values updated (swipe displacement 0.15→0.07, cooldown 1500→400ms, PALM_HOLD_MS 300→150, CLOSE_MIN_MS 300→150, fist/palm finger thresholds ≤2/≥4→≤3/≥3, ring buffer 30→90 frames); state machine pseudocode updated with uprightness gate, peak velocity, last-frame fire; palm orientation gate documented
+- **LATENCY_AND_AMBIGUOUS_POLICY.md**: Safe Mode section rewritten — "blocks execution until Cosmos responds" replaced with "observe only, no execution"
+- **SYSTEM_ARCHITECTURE.md**: added Student Classifier as component #4; Safe Mode updated to observe-only; verifier request schema updated with `features` + `student_prediction` fields; stale "hardcoded localhost" note replaced with URL query param instructions
+- **OPTION2_RISKS_AND_MITIGATIONS.md**: student model spec updated to actual 16-feature breakdown; `<1ms` → `<10ms`; "Implementation Priority" (in-progress items) → "Implementation Status" (all ✅); RF named as winner over LR
+- **PROJECT_CONTEXT.md**: gesture definitions updated to current implementation (fist→palm, pose-agnostic swipes); "Option 2 stretch goal" → "Teacher-student loop (operational)" with current accuracy
+- **STATUS.md**: added 2026-03-03 current state header; completed items marked ✅; deadline updated 4→2 days
+
+### Student v5 trained on DGX with live Cosmos-labeled data
+- `build_calibration.py` extended to read `verifier/logs/verifier_events.jsonl` as a second data source; deduplicates by `event_id`; only includes `nim_called=True` events with all 12 required features
+- v5 trained: RandomForest, 88.2% accuracy, 380 live samples (306 TP / 74 NEG); 96.3% on balanced eval set (133 samples)
+- Training pipeline fully automated: `build_calibration.py` → `train_student.py` → model saved to `models/student/current_model.joblib`
+
+### Debug logging gated behind DEBUG_GESTURES flag
+- Added `const DEBUG_GESTURES = false` at top of `web/src/gesture.js`
+- Added `function dbg(...args) { if (DEBUG_GESTURES) console.log(...args); }`
+- All 22 targeted log call sites ([SWIPE-HIT], [SWIPE-MISS], [SWIPE-START], [SWIPE-LASTFRAME], [SWIPE-GATE], [PALM-GATE], [GESTURE FRAME], [SWIPE] tracking:) switched to `dbg()`
+- `[SWIPE] suppressed — open/close menu active` intentionally left as plain `console.log`
+
+### Safe mode label changed to "observe only"
+- `web/src/index.html` label updated: "Safe Mode (verify before execute)" → "Safe Mode (observe only)"
+
+### Live verifier logs wired into retraining pipeline
+- `build_calibration.py` now reads from two sources: eval results JSON (existing) + `verifier/logs/verifier_events.jsonl` (new)
+- Prints source breakdown: eval events / live log events / total / skipped counts
+
+### Infrastructure notes
+- DGX Spark: SSH via `ssh spark-3527` (user `joonj14`); Cosmos Reason 2 via vLLM on port 8000; verifier on port 8788
+- GitHub push pending: got HTTP 500 from GitHub during push attempt (their outage); local commit `5bff6be` ready to push when resolved
+
+### Next session priorities
+1. Run in safe mode (observe only) to accumulate NEG training data from real usage — live verifier logs will populate `verifier_events.jsonl` with Cosmos-labeled events
+2. Re-run `build_calibration.py` + `train_student.py` to produce student v6 with expanded NEG coverage
+3. Update README with student model progression table (v1–v6 accuracy, sample count)
+4. Record demo video (under 3 min): loose state machine → Cosmos rejecting false positives → student filtering in real time → architecture diagram → metrics
 
 ---
 
@@ -124,7 +177,7 @@ SWIPE_MIN_DISPLACEMENT:    0.07     (Euclidean total; was 0.15 x-only)
 SWIPE_MIN_X_DISPLACEMENT:  0.05     (new — absolute x-displacement gate)
 SWIPE_MIN_DURATION:        0.05     (was 0.20)
 SWIPE_MAX_DURATION:        2.0      (was 1.5)
-COOLDOWN_MS:               1200     (was 800 earlier today, 1500 originally)
+COOLDOWN_MS:               400      (further reduced in Block 2 session; was 1200 → 600 → 400)
 Fist threshold:            ≤3 fingers extended  (was ≤2)
 Palm threshold:            ≥3 fingers extended AND palm facing camera  (was ≥4)
 Swipe direction guard:     |dx|/total ≥ 0.40  (rejects purely vertical motions)
@@ -236,7 +289,7 @@ Under 3 minutes:
 
 ## Deadline
 
-**NVIDIA Cosmos Cookoff: March 5, 2026 (4 days remaining)**
+**NVIDIA Cosmos Cookoff: March 5, 2026 (2 days remaining)**
 
 ---
 
@@ -323,15 +376,19 @@ f97329d  feat: recording state cycle with visual feedback, clip playback preview
 - [x] `scripts/build_calibration.py` — agreed clips → calibration.jsonl for regression checks
 - [x] `web/review.html` — standalone drag-drop clip viewer, 10fps playback, keyboard nav
 
-### Remaining (tomorrow)
-- [ ] **Wake DGX Spark** — physical access, verify Cosmos + verifier running
-- [ ] **Record eval clips** — 80+ TPs via auto-capture, 20+ NEGs via manual recording
-- [ ] **Run eval_cosmos.py** — get precision/recall table for submission
-- [ ] **Run build_calibration.py** — freeze calibration set
-- [ ] **Train first student model** — run train_student.py, evaluate
-- [ ] **Shadow mode validation** — compare student predictions vs Cosmos labels
-- [ ] **Demo video** — under 3 minutes if time permits
-- [ ] Final README polish
+### Completed (2026-03-02)
+- [x] **Wake DGX Spark** — Cosmos + verifier running, NIM_ENABLED=1
+- [x] **Record eval clips** — 151 clips (70 TP + 81 hard NEG across 6 categories)
+- [x] **Run eval_cosmos.py** — 98.6% TP recall, 90.1% hard negative rejection (10 prompt iterations)
+- [x] **Run build_calibration.py** — now reads both eval clips and live verifier_events.jsonl
+- [x] **Train student models v1–v5** — v5 at 88.2% accuracy, 380 live samples + 96.3% on eval set
+- [x] **Safe mode** — relabeled "observe only"; shows Student and Cosmos side by side, no execution
+- [x] **Swipe detection tuning** — uprightness gate, palm orientation gate, last-frame fire, DEBUG_GESTURES flag
+- [x] **README fully updated** — Results section, Quick Start (4 services), Teacher-Student section
+
+### Remaining (2026-03-03)
+- [ ] **Demo video** — under 3 minutes
+- [ ] **Submit** — GitHub issue using Cosmos Cookoff template (deadline March 5)
 
 ---
 

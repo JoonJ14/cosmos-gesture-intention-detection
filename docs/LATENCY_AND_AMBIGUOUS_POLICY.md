@@ -51,33 +51,27 @@ system over time without being in the hot path.
 **Logging field:** `policy_path = async_verified` (Cosmos result arrived),
 `policy_path = async_queued` (Cosmos not yet responded when event closed).
 
-### 2) Safe Mode (synchronous, opt-in for demo)
+### 2) Safe Mode (observe only, opt-in for demo)
 
-Safe Mode is a demo-only option that blocks execution until Cosmos responds (~7s wait).
-It exists to show Cosmos reasoning in real time — the judge can see the rationale appear
-before the desktop action fires.
+Safe Mode is an observe-only mode: **no gestures execute at all**. Both the Student model
+and Cosmos decisions are shown in the UI overlay in real time, letting a demo audience (or
+judge) see what each layer decided — without any desktop actions firing.
 
-Safe Mode is **not suitable for normal use** due to the 7s latency. It is toggled via
-the Safe Mode checkbox in the web UI (default: off in production, on during demo).
+Toggle via the **Safe Mode (observe only)** checkbox in the web UI.
 
 ```
-Gesture detected → local_confidence computed
+Gesture detected → proposals sent to Student and Cosmos as normal
     │
-    ├── confidence ≥ LOW → Call Cosmos verifier (BLOCKS)
-    │       │
-    │       ├── Cosmos approves (intentional=true, final_intent≠NONE) → Execute
-    │       ├── Cosmos rejects (intentional=false or final_intent=NONE) → Do NOT execute, log rejection
-    │       └── Cosmos timeout → Do NOT execute, log timeout
-    │
-    └── confidence < LOW → Ignore
+    ├── Student prediction → logged and displayed (no execution)
+    └── Cosmos result (~7s later) → logged and displayed (no execution)
 ```
 
-**Timeout policy in Safe Mode:** If verifier does not respond within the configured
-timeout (default 15s, configurable via UI), the gesture is NOT executed. This prevents
-late verification from causing stale actions.
+**Why this exists:** The 5.8–8.4s Cosmos latency rules out a synchronous verify-then-execute
+flow. Safe Mode sidesteps the problem entirely by removing execution — useful for demos and
+comparison, not for real use.
 
-**Logging field:** `policy_path = safe_mode_verified`, `policy_path = safe_mode_rejected`,
-`policy_path = safe_mode_timeout`.
+**In normal (non-safe) mode:** gestures execute immediately based on local gesture detection.
+Cosmos verifies in the background to generate training labels for the student model.
 
 ### 3) Stub mode (offline development, no DGX)
 
@@ -135,7 +129,7 @@ intentional or incidental, and the label is stored. Over time, disagreements bet
 the local model and Cosmos identify the boundary of the local model's reliability and
 feed the Option 2 improvement loop.
 
-In Safe Mode, ambiguity is resolved before execution — Cosmos is the gate.
+In Safe Mode, no execution occurs — the mode exists for observation and comparison only.
 
 Hard negatives (self-grooming, reaching, conversation gestures) are the primary
 source of false positives from the local detector. Cosmos correctly identifies these

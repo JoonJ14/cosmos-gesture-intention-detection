@@ -20,7 +20,7 @@ Option 2 solves this by making Cosmos a **teacher** instead of a gatekeeper. Cos
 │                                                              │
 │  1. Loose state machine fires gesture proposal               │
 │  2. Student classifier decides: EXECUTE or SUPPRESS          │
-│     (runs in <1ms using landmark features)                   │
+│     (runs in <10ms using landmark features)                  │
 │  3. If EXECUTE → action fires immediately (responsive UX)    │
 │  4. Evidence frames ALWAYS go to Cosmos async                │
 │  5. Cosmos returns intent label (5–8 seconds later)          │
@@ -76,20 +76,26 @@ If the student perfectly mimics Cosmos, it inherits whatever Cosmos gets wrong. 
 
 ## What the Student Model Looks Like
 
-**Input features (per gesture proposal):**
-- Swipe displacement (% of frame width)
-- Swipe duration (seconds)
-- Peak velocity of wrist motion (landmark 0)
-- Handedness consistency (% of frames with same hand label)
-- Finger extension count at proposal time
-- Palm facing score (z-depth differential between wrist and fingertips)
-- Motion smoothness (jerk metric)
-- Hand size in frame (bounding box area)
-- Wrist position relative to face (above/below/beside — helps distinguish commands from grooming)
+**Input features (per gesture proposal) — 16 total:**
 
-**Output:** Binary (intentional / not intentional) + intent class if intentional
+12 numeric MediaPipe features from `gesture.js extractFeatures()`:
+- `swipeDisplacement` — Euclidean wrist displacement (% of frame width)
+- `swipeDuration` — gesture window duration (seconds)
+- `peakVelocity` — max per-frame wrist x-delta during swipe trajectory
+- `fingersExtended` — count at proposal time (0–5)
+- `handSide` — 1 = Right, 0 = Left
+- `handSpan` — bounding box diagonal (frame fraction)
+- `wristX`, `wristY` — normalized wrist position in frame
+- `palmFacing` — fingertip z − wrist z (negative = palm toward camera)
+- `wristVelocityX`, `wristVelocityY` — signed average over last 5 frames
+- `stateConfidence` — local confidence score from state machine
 
-**Model:** Logistic regression or small random forest via scikit-learn. Must be under ~100 parameters. Must run in under 1 ms per prediction. Runs in a local Python service or potentially in the browser via a simple weight lookup.
+4 one-hot gesture type encodings:
+- `gesture_OPEN_MENU`, `gesture_CLOSE_MENU`, `gesture_SWITCH_RIGHT`, `gesture_SWITCH_LEFT`
+
+**Output:** Binary (intentional / not intentional)
+
+**Model:** RandomForest (scikit-learn). Both LogisticRegression and RandomForest are trained each run; the higher test-accuracy model is saved. RF has consistently won. Runs in under 10ms per prediction in the student service (Python Flask, port 8789).
 
 **Important:** We never fine-tune Cosmos. Cosmos is a general reasoning model that already understands human intent from video. Fine-tuning it on a handful of gestures would be overkill, slow, and fragile. Instead, we train a tiny local model on hand landmark features, using Cosmos's structured labels as ground truth.
 
@@ -239,13 +245,14 @@ Key metric for judges: false positive rate on hard negatives — baseline (state
 
 ---
 
-## Implementation Priority
+## Implementation Status
 
-This is NOT a stretch goal. It is the core deliverable for the submission. The implementation order:
+All core components are operational as of 2026-03-02:
 
-1. Loosened state machine (in progress)
-2. Eval clip recording + Cosmos labeling (generates training data AND calibration set)
-3. Feature extraction from JSONL logs
-4. Student classifier training script
-5. Shadow mode integration
-6. Demo video showing the full loop
+1. ✅ Loosened state machine — high-recall gesture detection running
+2. ✅ Eval clip recording + Cosmos labeling — 151 clips evaluated (70 TP + 81 hard NEG)
+3. ✅ Feature extraction — `extractFeatures()` in gesture.js, 16 features per proposal
+4. ✅ Student classifier — RandomForest, 88.2% accuracy on 380 live samples; `models/student/current_model.joblib`
+5. ✅ Safe mode (observe only) — shows Student and Cosmos predictions side by side, no execution
+6. ✅ Automated training pipeline — `build_calibration.py` → `train_student.py` → model auto-saved
+7. 🔲 Demo video — in progress

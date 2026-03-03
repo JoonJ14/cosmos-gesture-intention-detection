@@ -114,5 +114,34 @@
       "gesture_SWITCH_RIGHT",
       "gesture_SWITCH_LEFT"
     ]
+  },
+  {
+    "version": "v5",
+    "timestamp": "2026-03-03T19:25:15Z",
+    "num_samples": 133,
+    "pos_samples": 69,
+    "neg_samples": 64,
+    "model_type": "RandomForest",
+    "test_accuracy": 0.963,
+    "calib_accuracy": 0.9774,
+    "calib_acc_old": 0.9774,
+    "feature_names": [
+      "swipeDisplacement",
+      "swipeDuration",
+      "peakVelocity",
+      "fingersExtended",
+      "handSide",
+      "handSpan",
+      "wristX",
+      "wristY",
+      "palmFacing",
+      "wristVelocityX",
+      "wristVelocityY",
+      "stateConfidence",
+      "gesture_OPEN_MENU",
+      "gesture_CLOSE_MENU",
+      "gesture_SWITCH_RIGHT",
+      "gesture_SWITCH_LEFT"
+    ]
   }
 ]

@@ -2,7 +2,7 @@
 
 This document specifies the gesture detection algorithm for `web/src/gesture.js:proposeGestureFromLandmarks()`. It is the authoritative implementation reference for the local perception layer.
 
-**Last updated: 2026-03-01** — reflects the current implementation after the Block 1/1b session.
+**Last updated: 2026-03-03** — reflects the current implementation including swipe threshold tuning, uprightness gate, peak velocity filter, palm orientation gate, and last-frame fire check added in the Block 2 session.
 
 ---
 
@@ -55,7 +55,7 @@ fingerExtended = tip.y < mcp.y
 ## Hand acceptance
 
 ```
-MIN_HAND_SPAN   = 0.025   // hands spanning < 2.5% of frame width are ignored (too far/small)
+MIN_HAND_SPAN   = 0.015   // hands spanning < 1.5% of frame width are ignored (too far/small)
 REQUIRED_FRAMES = 1       // frames tracked before state machines activate (immediate)
 ```
 
@@ -75,35 +75,55 @@ On each frame per hand: if `getHandSpan(lms) < MIN_HAND_SPAN`, skip but still ma
 
 **Thresholds:**
 ```
-SWIPE_MIN_DISPLACEMENT = 0.15   // 15% of frame width minimum
-SWIPE_MIN_DURATION     = 0.20   // seconds
-SWIPE_MAX_DURATION     = 1.5    // seconds
+SWIPE_MIN_DISPLACEMENT  = 0.07   // Euclidean total displacement (diagonal arcs qualify)
+SWIPE_MIN_X_DISPLACEMENT = 0.05  // absolute x-component must reach this independently
+SWIPE_MIN_PEAK_VELOCITY  = 0.03  // max per-frame wrist x-delta — filters slow drift
+SWIPE_MIN_DURATION       = 0.05  // seconds
+SWIPE_MAX_DURATION       = 2.0   // seconds
+SWIPE_MIN_HAND_UPRIGHTNESS = 0.04 // wrist.y − middleMCP.y must exceed this (hand upright)
+SWIPE_UPRIGHT_FRAMES     = 1     // consecutive upright frames required before tracking starts
+PALM_THUMB_MIN_SPREAD    = 0.04  // |thumbTip.x − indexTip.x| — blocks edge-on hand for open/close
 ```
 
 **State machine:** `IDLE → TRACKING → (emit) → IDLE`
 
 ```
 IDLE:
-  Record startX = wrist.x, startTs = now
+  uprightness = wrist.y − middleMCP.y   // positive = wrist below knuckles = upright
+  if uprightness < SWIPE_MIN_HAND_UPRIGHTNESS:
+    uprightFrames = 0; return null      // gate: reject flat/resting hands
+  uprightFrames++
+  if uprightFrames < SWIPE_UPRIGHT_FRAMES:
+    return null                         // stabilization: wait for consistent upright pose
+  Record startX = wrist.x, startTs = now, trajX = [wrist.x]
   → TRACKING
 
 TRACKING (each frame):
-  rightDisp = startX − wX        // positive when x decreased (screen-right)
-  leftDisp  = wX − startX        // positive when x increased (screen-left)
+  trajX.push(wrist.x)
+  dx        = wX − startX         // positive = screen-left; negative = screen-right
+  dy        = wY − startY
+  totalDisp = √(dx² + dy²)        // Euclidean — diagonal arcs qualify
+  absDx     = |dx|
+  peakVel   = max per-frame |trajX[i] − trajX[i−1]|
 
   if elapsed > SWIPE_MAX_DURATION:
     → IDLE (timeout)
 
-  if rightDisp ≥ SWIPE_MIN_DISPLACEMENT AND elapsed ≥ SWIPE_MIN_DURATION:
-    emit SWITCH_LEFT, → IDLE
+  hasLateralComponent = totalDisp > 0 AND absDx / totalDisp ≥ 0.40
 
-  if leftDisp ≥ SWIPE_MIN_DISPLACEMENT AND elapsed ≥ SWIPE_MIN_DURATION:
-    emit SWITCH_RIGHT, → IDLE
+  if totalDisp ≥ SWIPE_MIN_DISPLACEMENT AND absDx ≥ SWIPE_MIN_X_DISPLACEMENT
+     AND elapsed ≥ SWIPE_MIN_DURATION AND hasLateralComponent
+     AND peakVel ≥ SWIPE_MIN_PEAK_VELOCITY:
+    emit SWITCH_LEFT (if dx < 0) or SWITCH_RIGHT (if dx > 0), → IDLE
+
+// Last-frame fire: if hand disappears while TRACKING with sufficient accumulated displacement:
+if sw.lastTotalDisp ≥ 0.05 AND sw.lastAbsDx ≥ 0.04:
+  emit intent (logged as [SWIPE-LASTFRAME])
 ```
 
-**Debug log (every TRACKING frame):**
+**Debug log (every TRACKING frame, only when DEBUG_GESTURES=true):**
 ```
-[SWIPE] tracking: Right, rawDisplacement: -0.183, screenDir: RIGHT, duration: 0.312s
+[SWIPE] tracking: Right, dx: -0.183, absDx: 0.183, dy: 0.021, total: 0.184, screenDir: RIGHT, duration: 0.312s
 ```
 
 ---
@@ -114,12 +134,18 @@ Requires a **deliberate fist→palm** transition. Static open palm without a pri
 
 **Pose thresholds:**
 ```
-isFist = countExtendedFingers ≤ 2    // ≤2 allows thumb to stick out
-isOpen = countExtendedFingers ≥ 4 AND isPalmFacing
+isFist = countExtendedFingers ≤ 3    // relaxed — loose/relaxed hands qualify
+isOpen = countExtendedFingers ≥ 3 AND isPalmFacing
 
-FIST_HOLD_MS   = 100    // ms fist must be held before palm phase starts
-PALM_HOLD_MS   = 300    // ms open palm must be held (stable)
+FIST_HOLD_MS   = 50     // ms fist must be held before palm phase starts
+PALM_HOLD_MS   = 150    // ms open palm must be held (stable)
 PALM_STABILITY = 0.05   // max wrist drift during palm hold (fraction of frame width)
+```
+
+**Palm orientation gate (FIST→PALM transition and hold):**
+```
+thumbSpread = |thumbTip.x − indexTip.x|
+if thumbSpread < PALM_THUMB_MIN_SPREAD: reject (hand is edge-on to camera)
 ```
 
 **State machine:** `IDLE → FIST_DETECTED → PALM_OPENED → (emit) → IDLE`
@@ -160,17 +186,23 @@ PALM_OPENED (each frame):
 
 ### CLOSE\_MENU (palm → fist transition)
 
-Requires a **deliberate, still palm** followed by an **explicit in-frame fist held briefly**. Hand withdrawal (disappearing from frame) does NOT trigger.
+Requires an **open palm** followed by an **explicit in-frame fist held briefly**. Hand withdrawal (disappearing from frame) does NOT trigger. No stillness requirement — moving hands are accepted (Cosmos filters false positives from reaching).
 
 **Pose thresholds:**
 ```
-isOpen = countExtendedFingers ≥ 4 AND isPalmFacing
-isFist = countExtendedFingers ≤ 2
+isOpen = countExtendedFingers ≥ 3 AND isPalmFacing
+isFist = countExtendedFingers ≤ 3
 
-CLOSE_MIN_MS         = 300    // min palm hold before fist is accepted
-CLOSE_MAX_MS         = 1000   // total sequence timeout
-CLOSE_FIST_HOLD_MS   = 150    // fist must be held this long to fire
-CLOSE_PALM_MAX_DRIFT = 0.06   // max wrist drift during palm phase (rejects reaching/withdrawal)
+CLOSE_MIN_MS       = 150    // min palm hold before fist is accepted
+CLOSE_MAX_MS       = 1000   // total sequence timeout
+CLOSE_FIST_HOLD_MS = 75     // fist must be held this long to fire
+// CLOSE_PALM_MAX_DRIFT removed — no stillness check; moving hands allowed
+```
+
+**Palm orientation gate (IDLE → OPEN_SEEN):**
+```
+thumbSpread = |thumbTip.x − indexTip.x|
+if thumbSpread < PALM_THUMB_MIN_SPREAD: reject (hand is edge-on to camera)
 ```
 
 **State machine:** `IDLE → OPEN_SEEN → FIST_SEEN → (emit) → IDLE`
@@ -181,15 +213,14 @@ IDLE:
     if openCount ≥ REQUIRED_FRAMES:
       if OPEN_MENU is in FIST_DETECTED or PALM_OPENED:
         openCount = 0; return  ← OPEN_MENU has priority, defer
+      if thumbSpread < PALM_THUMB_MIN_SPREAD: return  ← orientation gate
       startTs = now, palmStartWX = wrist.x
       → OPEN_SEEN
   else: openCount = 0
 
 OPEN_SEEN (each frame):
-  elapsed       = now − startTs
-  wristMovement = |wrist.x − palmStartWX|
-
-  if wristMovement > CLOSE_PALM_MAX_DRIFT:  → IDLE  (hand moving)
+  elapsed = now − startTs
+  // No stillness check — moving hands allowed
   if elapsed > CLOSE_MAX_MS / 1000:          → IDLE  (timeout)
   if isOpen: keep waiting
   if isFist AND elapsed ≥ CLOSE_MIN_MS / 1000:
@@ -271,10 +302,10 @@ proposeGestureFromLandmarks(results):
 ## Global cooldown
 
 ```
-COOLDOWN_MS = 1500   // ms after any gesture fires before detection resumes
+COOLDOWN_MS = 400   // ms after any gesture fires before detection resumes
 ```
 
-After any proposal is emitted, all state machines are reset and the cooldown blocks `proposeGestureFromLandmarks` entirely for 1.5 s.
+After any proposal is emitted, all state machines are reset and the cooldown blocks `proposeGestureFromLandmarks` entirely for 400ms.
 
 ---
 
@@ -285,8 +316,8 @@ After any proposal is emitted, all state machines are reset and the cooldown blo
 | Factor | Weight | Notes |
 |--------|--------|-------|
 | MediaPipe confidence | 0.30 | Raw score from MediaPipe handedness |
-| Displacement margin | 0.40 | How far past 15% threshold the swipe went |
-| Temporal fit | 0.15 | How close elapsed is to center of [0.2 s, 1.5 s] window |
+| Displacement margin | 0.40 | How far past 7% threshold the swipe went |
+| Temporal fit | 0.15 | How close elapsed is to center of [0.05 s, 2.0 s] window |
 | Hand size | 0.15 | Larger = landmarks more reliable |
 
 Pose stability removed (swipe is pose-agnostic).
@@ -323,7 +354,7 @@ Pose stability removed (swipe is pose-agnostic).
 
 ## Ring buffer for evidence windows
 
-- **Buffer size**: 30 frames (~1 s at 30 fps) in `web/src/ringbuffer.js`
+- **Buffer size**: 90 frames (~3 s at 30 fps) in `web/src/ringbuffer.js`
 - **Storage**: each entry = `canvas.toDataURL('image/jpeg', 0.7)` + landmarks + timestamp
 - **On proposal**: `getEvidenceWindow(8)` extracts 8 evenly-spaced frames
 - **Purpose**: sent to Cosmos verifier as visual evidence
@@ -335,4 +366,4 @@ Pose stability removed (swipe is pose-agnostic).
 - **Both hands visible**: each hand has independent state (`perHand.Left`, `perHand.Right`). Gestures on different hands don't interfere except via the global cooldown.
 - **Hand disappears mid-sequence**: state is reset to IDLE for that hand on the next frame it is absent.
 - **CLOSE_MENU + OPEN_MENU conflict**: handled by the mutual exclusion logic above. The more-specific gesture (OPEN_MENU with fist precondition) always wins.
-- **Swipe false positives from hand entry**: since `REQUIRED_FRAMES = 1`, swipe tracking starts immediately. The displacement threshold (15%) and min duration (0.2 s) filter out instantaneous entry artifacts.
+- **Swipe false positives from hand entry**: since `REQUIRED_FRAMES = 1`, swipe tracking starts immediately once the uprightness gate passes. The displacement threshold (7% Euclidean) and min duration (0.05 s) filter out instantaneous entry artifacts.

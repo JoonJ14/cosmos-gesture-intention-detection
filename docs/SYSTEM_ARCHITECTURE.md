@@ -53,7 +53,21 @@ Runs on DGX Spark (or locally for development with stub logic).
 - DGX-only mode: verifier calls `http://localhost:<nim_port>/v1/chat/completions`
 - Mac + DGX mode: verifier on DGX is called from Mac's web app at `http://<dgx_ip>:8788/verify`
 
-### 4. Cosmos Reason 2 NIM (DGX Spark)
+### 4. Student Classifier (`student/`, Python Flask, port 8789)
+
+Runs locally on the same machine as the web app.
+
+**Responsibilities:**
+- Receives gesture proposals via `POST /predict` with the 16-feature vector from gesture.js
+- Returns `execute` (true/false) and confidence from a RandomForest classifier
+- Hot-reloads `models/student/current_model.joblib` when the file changes
+- Supports shadow mode (predictions logged but always returns execute=true) and active mode
+
+**Model:** scikit-learn RandomForest trained on Cosmos-labeled gesture events. 12 numeric MediaPipe features + 4 one-hot gesture type = 16 features total. Inference <10ms.
+
+**Training pipeline:** `build_calibration.py` aggregates Cosmos-labeled events from `verifier/logs/verifier_events.jsonl` → `train_student.py` trains and saves `models/student/current_model.joblib`.
+
+### 5. Cosmos Reason 2 NIM (DGX Spark)
 
 - NVIDIA Inference Microservice running Cosmos Reason 2
 - OpenAI-compatible API at `/v1/chat/completions`
@@ -61,7 +75,7 @@ Runs on DGX Spark (or locally for development with stub logic).
 - Based on Qwen3-VL architecture, runs on Blackwell GPU
 - Apache 2.0 source, NVIDIA Open Model License for weights
 
-### 5. Shared Contract (`shared/schema.json`)
+### 6. Shared Contract (`shared/schema.json`)
 
 Single strict JSON Schema for all verifier responses. 7 required fields, no additional properties. Used by:
 - Verifier runtime validation (rejects non-conforming Cosmos output)
@@ -103,9 +117,13 @@ Request:
   "proposed_intent": "SWITCH_RIGHT",
   "frames": ["base64-jpeg-1", "base64-jpeg-2", "...8-12 frames"],
   "landmark_summary_json": { "handedness": "Right", "trajectory": [...], "palm_facing": true },
-  "local_confidence": 0.73
+  "local_confidence": 0.73,
+  "features": { "swipeDisplacement": 0.12, "peakVelocity": 0.08, "...": "..." },
+  "student_prediction": { "execute": true, "confidence": 0.91 }
 }
 ```
+
+(`features` and `student_prediction` are optional — logged alongside Cosmos verdict for training correlation.)
 
 Response (must validate against `shared/schema.json`):
 ```json
@@ -148,23 +166,25 @@ Async verification (background, non-blocking):
     → Disagreements = training signal for Option 2 teacher-student loop
 ```
 
-### Safe Mode: synchronous verification (demo only)
+### Safe Mode: observe only (demo)
 
-Safe Mode blocks execution until Cosmos responds (~7s). It exists to show Cosmos
-reasoning in real time during demos — the rationale appears before the desktop action
-fires. Not suitable for normal use. Toggle via the Safe Mode checkbox in the web UI.
+Safe Mode is an observe-only mode — **no gestures execute at all**. Proposals are sent to
+both the Student model and Cosmos; both decisions are displayed in the UI overlay in real
+time. Useful for showing judges what each layer decides without triggering desktop actions.
+Toggle via the **Safe Mode (observe only)** checkbox in the web UI.
 
 ```
-Gesture detected → local_confidence ≥ LOW
-    → Call Cosmos verifier (BLOCKS on response)
-    │
-    ├── Cosmos approves (intentional=true, final_intent≠NONE) → Execute
-    ├── Cosmos rejects                                        → Do NOT execute, log rejection
-    └── Cosmos timeout (default 15s)                         → Do NOT execute, log timeout
+Gesture detected → proposals sent to Student and Cosmos as normal
+    → Student prediction displayed in overlay (no execution)
+    → Cosmos result displayed in overlay (~7s later, no execution)
 ```
 
-**Discrimination accuracy (measured):** 3/3 correct on intentional swipe (ACCEPT),
-head scratch (REJECT), and conversation wave (REJECT). Schema-valid output on all runs.
+**Why not synchronous verify-then-execute:** The 5.8–8.4s Cosmos latency rules that out.
+In normal mode, gestures execute immediately and Cosmos verifies in the background for
+training label generation only.
+
+**Full-system accuracy (measured on 151 eval clips):** 98.6% TP recall, 90.1% hard
+negative rejection across 6 negative categories (10 prompt iterations, ~50 minutes total).
 
 See `docs/LATENCY_AND_AMBIGUOUS_POLICY.md` for the full policy specification including
 merge/supersede rules, stale response handling, and instrumentation fields.
@@ -205,7 +225,7 @@ DGX Spark:
   Verifier (:8788) → Cosmos NIM (localhost)
 ```
 
-**Requirement for Mac+DGX mode:** The verifier base URL in the web app must be configurable (not hardcoded to localhost). The web app currently hardcodes `http://127.0.0.1:8788` in `api.js` — this must be made configurable via a UI input or URL parameter.
+**Verifier URL configuration:** Pass `?verifier=http://192.168.1.250:8788&student=http://localhost:8789` as URL query params when opening the web app. Both URLs are configurable at runtime with no code changes.
 
 ### Stub mode (offline development)
 Same as DGX-only or Mac-only, but the verifier uses stub logic (always approve or force-reject) instead of calling Cosmos. Useful for developing gesture detection without DGX access.

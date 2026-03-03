@@ -1,5 +1,7 @@
 # Update README: Add Prompt Engineering Narrative
 
+> **Status: COMPLETED (2026-03-02).** This was a planning doc used to draft the README prompt engineering section. The content has been incorporated into the README. Kept for historical reference only.
+
 ## Context
 
 This is for the NVIDIA Cosmos Cookoff 2026 competition submission (deadline March 5). The project is a webcam gesture control system that uses Cosmos Reason 2 as an intent verifier. We went through 5 prompt engineering iterations that demonstrate why VLMs are superior to traditional ML for this problem.
