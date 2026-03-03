@@ -14,6 +14,7 @@ Output:
     models/student/training_log.json      — training metadata
 """
 
+import argparse
 import glob
 import json
 import sys
@@ -52,14 +53,24 @@ def features_to_row(features: dict, gesture_type: str) -> list:
 
 # ─── Log loading and filtering ────────────────────────────────────────────────
 
-def load_labeled_events() -> list[dict]:
-    """Read all verifier JSONL logs and return events with usable Cosmos labels."""
+def load_labeled_events(
+    pos_threshold: float, neg_threshold: float
+) -> tuple[list[dict], dict]:
+    """Read all verifier JSONL logs and return events with usable Cosmos labels.
+
+    Applies asymmetric confidence thresholds: pos_threshold for intentional=True
+    samples, neg_threshold for intentional=False samples.
+
+    Returns (events, stats) where stats has per-category kept/dropped counts.
+    """
     log_paths = list(REPO_ROOT.glob("**/verifier_events.jsonl"))
     if not log_paths:
         print("No verifier_events.jsonl found. Run the verifier and accumulate logs first.")
         sys.exit(1)
 
     events = []
+    stats = {"pos_kept": 0, "pos_dropped": 0, "neg_kept": 0, "neg_dropped": 0}
+
     for path in log_paths:
         with path.open() as f:
             for line in f:
@@ -85,13 +96,25 @@ def load_labeled_events() -> list[dict]:
                 intentional   = resp.get("intentional")
                 gesture_type  = features.get("gestureType") or record.get("proposed_intent")
 
-                # Quality filters
-                if cosmos_conf < 0.75:
+                # Quality filters — check intentional first so threshold is known
+                if intentional is None or gesture_type is None:
                     continue
                 if reason == "unknown":
                     continue
-                if intentional is None or gesture_type is None:
+
+                # Asymmetric confidence threshold based on label
+                threshold = pos_threshold if intentional else neg_threshold
+                if cosmos_conf < threshold:
+                    if intentional:
+                        stats["pos_dropped"] += 1
+                    else:
+                        stats["neg_dropped"] += 1
                     continue
+
+                if intentional:
+                    stats["pos_kept"] += 1
+                else:
+                    stats["neg_kept"] += 1
 
                 events.append({
                     "features":    features,
@@ -102,7 +125,7 @@ def load_labeled_events() -> list[dict]:
                     "event_id":    record.get("event_id", ""),
                 })
 
-    return events
+    return events, stats
 
 
 def build_matrix(events: list[dict]):
@@ -165,9 +188,20 @@ def next_version_num() -> int:
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
+    parser = argparse.ArgumentParser(description="Train student gesture classifier from Cosmos-labeled logs.")
+    parser.add_argument("--pos-threshold", type=float, default=0.60,
+                        help="Min Cosmos confidence to keep intentional=True samples; lower than 0.75 to preserve gesture diversity including sloppy/casual executions Cosmos approved with moderate confidence (default: 0.60)")
+    parser.add_argument("--neg-threshold", type=float, default=0.50,
+                        help="Min Cosmos confidence to keep intentional=False samples; lower threshold is sufficient because Cosmos is more reliable at rejection than approval (default: 0.50)")
+    args = parser.parse_args()
+
     print("─── Loading labeled events ───")
-    events = load_labeled_events()
-    print(f"Found {len(events)} usable events (cosmos_confidence ≥ 0.75, reason ≠ unknown)")
+    print(f"Thresholds: pos (intentional=True) ≥ {args.pos_threshold}  |  neg (intentional=False) ≥ {args.neg_threshold}")
+    events, stats = load_labeled_events(args.pos_threshold, args.neg_threshold)
+    print(f"Found {len(events)} usable events after filtering (reason ≠ unknown)")
+    print(f"  Kept    — Intentional: {stats['pos_kept']}  |  Not intentional: {stats['neg_kept']}")
+    print(f"  Dropped — Intentional: {stats['pos_dropped']} (conf < {args.pos_threshold})  |  "
+          f"Not intentional: {stats['neg_dropped']} (conf < {args.neg_threshold})")
 
     if len(events) < MIN_SAMPLES:
         needed = MIN_SAMPLES - len(events)
