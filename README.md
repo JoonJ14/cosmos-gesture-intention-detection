@@ -224,11 +224,11 @@ The gesture state machine is intentionally **high-recall / low-precision**: it f
 The pipeline is fully automated: `build_calibration.py` aggregates Cosmos-labeled events from `verifier/logs/verifier_events.jsonl` → `train_student.py` trains and saves the model → the student service hot-reloads on the next request. Safe mode (observe only) shows both Student and Cosmos decisions side by side in real time for comparison.
 
 **Three phases:**
-1. **Phase 1** *(current)* — 100% of proposals go to Cosmos for labeling; student runs in parallel for comparison
+1. **Phase 1** — 100% of proposals go to Cosmos for labeling; student runs in parallel for comparison
 2. **Phase 2** — When student-Cosmos agreement exceeds 90%, reduce Cosmos sampling to ~50%
 3. **Phase 3** — When agreement exceeds 95%, spot-check only (10–20%); student handles the rest
 
-Phase 2 and 3 are designed but not yet activated — requires more training data and sustained agreement rates above threshold. A small random percentage will always go to Cosmos (never 0%) to detect student blind spots.
+As the user keeps using our models, it will go through Phase 1 and then as it keeps improving and learning from Cosmos reasoning model, it will go to Phase 2 and eventually Phase 3. A small random percentage will always go to Cosmos (never 0%) to detect student blind spots.
 
 See [Teacher-Student Loop Design & Risks](docs/OPTION2_RISKS_AND_MITIGATIONS.md) for the full design, failure modes, and safeguards.
 
