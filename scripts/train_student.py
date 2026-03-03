@@ -27,6 +27,21 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+
+try:
+    from xgboost import XGBClassifier
+    _XGBOOST_AVAILABLE = True
+except ImportError:
+    _XGBOOST_AVAILABLE = False
+
+try:
+    from lightgbm import LGBMClassifier
+    _LIGHTGBM_AVAILABLE = True
+except ImportError:
+    _LIGHTGBM_AVAILABLE = False
 
 REPO_ROOT         = Path(__file__).resolve().parents[1]
 MODEL_DIR         = REPO_ROOT / "models" / "student"
@@ -115,13 +130,35 @@ def load_calibration(path: Path = CALIB_PATH):
 # ─── Training ─────────────────────────────────────────────────────────────────
 
 def train_and_pick(X_train, y_train, X_test, y_test):
-    """Train LR and RF; return the better model."""
-    results = []
-    for name, clf in [
+    """Train LR, RF, XGBoost, LightGBM, and SVM; return the best model."""
+    candidates = [
         ("LogisticRegression", LogisticRegression(max_iter=500, class_weight="balanced")),
         ("RandomForest",       RandomForestClassifier(max_depth=3, n_estimators=10,
                                                       class_weight="balanced", random_state=42)),
-    ]:
+        ("SVM_RBF",            Pipeline([
+                                   ("scaler", StandardScaler()),
+                                   ("svm",    SVC(kernel="rbf", probability=True, class_weight="balanced")),
+                               ])),
+    ]
+
+    if _XGBOOST_AVAILABLE:
+        candidates.append(("XGBoost", XGBClassifier(
+            n_estimators=100, max_depth=6, learning_rate=0.1,
+            eval_metric="logloss", random_state=42,
+        )))
+    else:
+        print("  [skip] XGBoost not installed")
+
+    if _LIGHTGBM_AVAILABLE:
+        candidates.append(("LightGBM", LGBMClassifier(
+            n_estimators=100, max_depth=6, learning_rate=0.1,
+            verbose=-1, random_state=42,
+        )))
+    else:
+        print("  [skip] LightGBM not installed")
+
+    results = []
+    for name, clf in candidates:
         clf.fit(X_train, y_train)
         acc = (clf.predict(X_test) == y_test).mean()
         print(f"  {name}: test accuracy = {acc:.3f}")
