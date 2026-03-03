@@ -91,13 +91,13 @@ The fix took under 5 minutes: rewrite the system prompt to add gesture descripti
 | 1 | Original prompt (rejection-biased) | ~15% | ~95% | Stopped early — too aggressive |
 | 2 | Balanced prompt + gesture descriptions | **100%** | 71.6% | Fixed in < 5 min |
 | 3 | + Gaze direction + yawning awareness | **100%** | 77.8% | Incremental improvement |
-| 4 | + Reach-specific lateral motion guidance | 98.6% ⚠️ | 80.2% | TP regression discovered |
+| 4 | + Reach-specific lateral motion guidance | 98.6% | 80.2% | TP regression discovered |
 | 5 | Reverted broad language, kept targeted reach | **100%** | 79.0% | Restored TP recall |
-| 6/6b | Pre-evaluation gaze gates | ~97–99% ⚠️ | N/A | Killed early — pre-gates contaminate |
-| 7 | Post-evaluation sanity check (gaze + reach) | 97.1% ⚠️ | 88.9% | NEG breakthrough; TP regression |
+| 6/6b | Pre-evaluation gaze gates | ~97–99% | N/A | Killed early — pre-gates contaminate |
+| 7 | Post-evaluation sanity check (gaze + reach) | 97.1% | 88.9% | NEG breakthrough; TP regression |
 | 8 | Softened sanity check + arm extension | **100%** | 79.0% | TPs back; NEG gains erased |
 | 9 | Assertive tone + arm extension signals | **100%** | 86.4% | Best 100% TP result |
-| 10 | + CLOSE_MENU transition verification | 98.6% ⚠️ | **90.1%** | **SHIPPED** — first >90% NEG |
+| 10 | + CLOSE_MENU transition verification | 98.6% | **90.1%** | **SHIPPED** — first >90% NEG |
 
 ### Key Discoveries
 
