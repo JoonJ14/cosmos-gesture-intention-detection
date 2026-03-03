@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Train the student gesture classifier from Cosmos-labeled JSONL logs.
+"""Train the student gesture classifier from a calibration JSONL dataset.
 
-Reads verifier logs (which contain both feature vectors and Cosmos labels),
-filters to high-confidence labels, trains a scikit-learn classifier, evaluates
-against a frozen calibration set, and saves if the new model doesn't regress.
+Reads a pre-filtered calibration file (produced by build_calibration.py),
+trains a scikit-learn classifier, evaluates against a frozen calibration set,
+and saves if the new model doesn't regress.
 
 Usage:
     python scripts/train_student.py
+    python scripts/train_student.py --data path/to/custom.jsonl
 
 Output:
     models/student/current_model.joblib   — loaded by student/service.py
@@ -15,7 +16,6 @@ Output:
 """
 
 import argparse
-import glob
 import json
 import sys
 import time
@@ -28,9 +28,10 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 
-REPO_ROOT  = Path(__file__).resolve().parents[1]
-MODEL_DIR  = REPO_ROOT / "models" / "student"
-CALIB_PATH = REPO_ROOT / "data" / "calibration" / "calibration.jsonl"
+REPO_ROOT         = Path(__file__).resolve().parents[1]
+MODEL_DIR         = REPO_ROOT / "models" / "student"
+CALIB_PATH        = REPO_ROOT / "data" / "calibration" / "calibration.jsonl"
+DEFAULT_DATA_PATH = CALIB_PATH
 
 FEATURE_NAMES = [
     "swipeDisplacement", "swipeDuration", "peakVelocity",
@@ -51,81 +52,48 @@ def features_to_row(features: dict, gesture_type: str) -> list:
     return numeric + onehot
 
 
-# ─── Log loading and filtering ────────────────────────────────────────────────
+# ─── Data loading ─────────────────────────────────────────────────────────────
 
-def load_labeled_events(
-    pos_threshold: float, neg_threshold: float
-) -> tuple[list[dict], dict]:
-    """Read all verifier JSONL logs and return events with usable Cosmos labels.
+def load_jsonl_events(path: Path) -> list[dict]:
+    """Load events from a calibration-format JSONL file.
 
-    Applies asymmetric confidence thresholds: pos_threshold for intentional=True
-    samples, neg_threshold for intentional=False samples.
+    Each line is expected to have:
+      - "features": dict of numeric feature values (including "gestureType")
+      - "gesture_type": gesture class string (top-level fallback)
+      - "label": 0 or 1
 
-    Returns (events, stats) where stats has per-category kept/dropped counts.
+    No threshold filtering is applied — the calibration file is assumed to be
+    pre-filtered by build_calibration.py.
     """
-    log_paths = list(REPO_ROOT.glob("**/verifier_events.jsonl"))
-    if not log_paths:
-        print("No verifier_events.jsonl found. Run the verifier and accumulate logs first.")
+    if not path.exists():
+        print(f"Data file not found: {path}")
         sys.exit(1)
 
     events = []
-    stats = {"pos_kept": 0, "pos_dropped": 0, "neg_kept": 0, "neg_dropped": 0}
+    with path.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
-    for path in log_paths:
-        with path.open() as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+            features     = record.get("features")
+            gesture_type = (features or {}).get("gestureType") or record.get("gesture_type")
+            label        = record.get("label")
 
-                resp     = record.get("response_json") or {}
-                features = record.get("features")
+            if features is None or gesture_type is None or label is None:
+                continue
 
-                # Require features vector and a valid Cosmos response
-                if not features or not resp:
-                    continue
-                if not resp.get("schema_valid", True):
-                    continue
+            events.append({
+                "features":     features,
+                "gesture_type": gesture_type,
+                "label":        int(label),
+            })
 
-                cosmos_conf   = resp.get("confidence", 0.0)
-                reason        = resp.get("reason_category", "unknown")
-                intentional   = resp.get("intentional")
-                gesture_type  = features.get("gestureType") or record.get("proposed_intent")
-
-                # Quality filters — check intentional first so threshold is known
-                if intentional is None or gesture_type is None:
-                    continue
-                if reason == "unknown":
-                    continue
-
-                # Asymmetric confidence threshold based on label
-                threshold = pos_threshold if intentional else neg_threshold
-                if cosmos_conf < threshold:
-                    if intentional:
-                        stats["pos_dropped"] += 1
-                    else:
-                        stats["neg_dropped"] += 1
-                    continue
-
-                if intentional:
-                    stats["pos_kept"] += 1
-                else:
-                    stats["neg_kept"] += 1
-
-                events.append({
-                    "features":    features,
-                    "gesture_type": gesture_type,
-                    "label":       int(bool(intentional)),
-                    "cosmos_conf": cosmos_conf,
-                    "reason":      reason,
-                    "event_id":    record.get("event_id", ""),
-                })
-
-    return events, stats
+    return events
 
 
 def build_matrix(events: list[dict]):
@@ -135,25 +103,10 @@ def build_matrix(events: list[dict]):
     return X, y
 
 
-def load_calibration():
-    if not CALIB_PATH.exists():
+def load_calibration(path: Path = CALIB_PATH):
+    if not path.exists():
         return None, None
-    events = []
-    with CALIB_PATH.open() as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            features     = record.get("features")
-            gesture_type = (features or {}).get("gestureType") or record.get("gesture_type")
-            label        = record.get("label")
-            if features is None or gesture_type is None or label is None:
-                continue
-            events.append({"features": features, "gesture_type": gesture_type, "label": int(label)})
+    events = load_jsonl_events(path)
     if not events:
         return None, None
     return build_matrix(events)
@@ -188,20 +141,17 @@ def next_version_num() -> int:
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Train student gesture classifier from Cosmos-labeled logs.")
-    parser.add_argument("--pos-threshold", type=float, default=0.60,
-                        help="Min Cosmos confidence to keep intentional=True samples; lower than 0.75 to preserve gesture diversity including sloppy/casual executions Cosmos approved with moderate confidence (default: 0.60)")
-    parser.add_argument("--neg-threshold", type=float, default=0.50,
-                        help="Min Cosmos confidence to keep intentional=False samples; lower threshold is sufficient because Cosmos is more reliable at rejection than approval (default: 0.50)")
+    parser = argparse.ArgumentParser(description="Train student gesture classifier from a calibration JSONL dataset.")
+    parser.add_argument("--data", type=Path, default=DEFAULT_DATA_PATH,
+                        help="Path to training data JSONL in calibration format "
+                             "(default: data/calibration/calibration.jsonl). "
+                             "Produced by build_calibration.py; no threshold filtering is applied here.")
     args = parser.parse_args()
 
-    print("─── Loading labeled events ───")
-    print(f"Thresholds: pos (intentional=True) ≥ {args.pos_threshold}  |  neg (intentional=False) ≥ {args.neg_threshold}")
-    events, stats = load_labeled_events(args.pos_threshold, args.neg_threshold)
-    print(f"Found {len(events)} usable events after filtering (reason ≠ unknown)")
-    print(f"  Kept    — Intentional: {stats['pos_kept']}  |  Not intentional: {stats['neg_kept']}")
-    print(f"  Dropped — Intentional: {stats['pos_dropped']} (conf < {args.pos_threshold})  |  "
-          f"Not intentional: {stats['neg_dropped']} (conf < {args.neg_threshold})")
+    print("─── Loading training data ───")
+    print(f"Source: {args.data}")
+    events = load_jsonl_events(args.data)
+    print(f"Loaded {len(events)} samples")
 
     if len(events) < MIN_SAMPLES:
         needed = MIN_SAMPLES - len(events)
@@ -214,6 +164,64 @@ def main():
     print(f"  Intentional: {pos}  |  Not intentional: {neg}")
 
     X, y = build_matrix(events)
+
+    # ── DIAGNOSTICS ──────────────────────────────────────────────────────────
+    print("\n─── DIAGNOSTIC (1): Label encoding ───")
+    raw_records = []
+    with args.data.open() as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line:
+                try:
+                    raw_records.append(json.loads(_line))
+                except json.JSONDecodeError:
+                    pass
+    for lv in [0, 1]:
+        samples = [(r.get("label"), r.get("user_label"), r.get("cosmos_intent"))
+                   for r in raw_records if r.get("label") == lv]
+        print(f"  label={lv}: {len(samples)} records  first 3: {samples[:3]}")
+
+    # check for records that share the same clip_id with conflicting labels
+    from collections import defaultdict
+    clip_labels = defaultdict(set)
+    for r in raw_records:
+        clip_labels[r.get("clip_id")].add(r.get("label"))
+    conflicts = {cid: lbls for cid, lbls in clip_labels.items() if len(lbls) > 1}
+    print(f"  Clips with conflicting labels (same clip_id, both 0 and 1): {len(conflicts)}")
+    for cid, lbls in list(conflicts.items())[:5]:
+        print(f"    {cid}: labels={lbls}")
+
+    # check for feature-identical rows with different labels
+    from collections import Counter
+    row_strs = [",".join(f"{v:.6g}" for v in X[i]) for i in range(len(X))]
+    row_label_pairs = Counter(zip(row_strs, y.tolist()))
+    row_groups = defaultdict(set)
+    for (row_str, lbl), _ in row_label_pairs.items():
+        row_groups[row_str].add(lbl)
+    feat_conflicts = {rs: lbls for rs, lbls in row_groups.items() if len(lbls) > 1}
+    print(f"  Feature-identical rows with different labels: {len(feat_conflicts)}")
+
+    print("\n─── DIAGNOSTIC (2): First 3 feature vectors ───")
+    col_names = FEATURE_NAMES + [f"gesture_{g}" for g in GESTURE_TYPES]
+    for i in range(min(3, len(events))):
+        print(f"  Sample {i}: gesture_type={events[i]['gesture_type']!r}  label={y[i]}")
+        for name, val in zip(col_names, X[i]):
+            print(f"    {name:22s} = {val:.4f}")
+
+    print("\n─── DIAGNOSTIC (3): Shape and value ranges ───")
+    expected_len = len(FEATURE_NAMES) + len(GESTURE_TYPES)
+    sample_row = features_to_row(events[0]["features"], events[0]["gesture_type"])
+    print(f"  X shape: {X.shape}  y shape: {y.shape}")
+    print(f"  Expected vector length: {len(FEATURE_NAMES)} numeric + {len(GESTURE_TYPES)} one-hot = {expected_len}")
+    print(f"  features_to_row() actual length: {len(sample_row)}  {'OK' if len(sample_row) == expected_len else 'MISMATCH!'}")
+    print(f"  NaNs in X: {np.isnan(X).any()}")
+    print(f"  All-zero rows: {(X == 0).all(axis=1).sum()} of {len(X)}")
+    print(f"  {'Feature':<22}  {'min':>8}  {'max':>8}  {'mean':>8}  nonzero")
+    for i, name in enumerate(col_names):
+        col = X[:, i]
+        print(f"  {name:<22}  {col.min():>8.4f}  {col.max():>8.4f}  {col.mean():>8.4f}  {np.count_nonzero(col)}/{len(col)}")
+    print("─── END DIAGNOSTICS ───\n")
+    # ─────────────────────────────────────────────────────────────────────────
 
     print("\n─── Calibration set ───")
     calib_X, calib_y = load_calibration()

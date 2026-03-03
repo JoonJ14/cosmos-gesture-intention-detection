@@ -65,8 +65,11 @@ def load_clips(extra_path=None):
         with p.open() as f:
             data = json.load(f)
         if isinstance(data, list):
+            for clip in data:
+                clip.setdefault("_session_id", p.stem)
             clips.extend(data)
         else:
+            data.setdefault("_session_id", p.stem)
             clips.append(data)
 
     # Session files (downloaded from browser)
@@ -76,8 +79,11 @@ def load_clips(extra_path=None):
             with p.open() as f:
                 data = json.load(f)
             if isinstance(data, list):
+                for clip in data:
+                    clip.setdefault("_session_id", p.stem)
                 clips.extend(data)
             else:
+                data.setdefault("_session_id", p.stem)
                 clips.append(data)
 
     return clips
@@ -250,6 +256,7 @@ def main():
 
         result = {
             "clip_id":             clip["clip_id"],
+            "session_id":          clip.get("_session_id", ""),
             "user_label":          label,
             "user_category":       clip.get("category"),
             "gesture_detected":    clip.get("gesture_detected"),

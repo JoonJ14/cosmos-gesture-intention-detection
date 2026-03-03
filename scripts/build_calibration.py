@@ -33,8 +33,14 @@ LABEL_TO_INTENT = {
 }
 
 
-def load_clips_by_id():
-    """Build clip_id → clip map from all clip files and session files."""
+def load_clips_by_key():
+    """Build (clip_id, label) → clip map from all clip files and session files.
+
+    Keying by (clip_id, label) rather than clip_id alone handles the case where
+    two eval sessions reuse the same clip numbering for different recordings.
+    Within a single session every (clip_id, label) pair is unique; across sessions
+    the same clip_id may appear with a different label, indicating a different clip.
+    """
     clips = {}
 
     for p in sorted(CLIPS_DIR.glob("clip_*.json")):
@@ -42,9 +48,9 @@ def load_clips_by_id():
             data = json.load(f)
         if isinstance(data, list):
             for clip in data:
-                clips[clip["clip_id"]] = clip
+                clips[(clip["clip_id"], clip.get("label", ""))] = clip
         else:
-            clips[data["clip_id"]] = data
+            clips[(data["clip_id"], data.get("label", ""))] = data
 
     sessions_dir = CLIPS_DIR.parent / "sessions"
     if sessions_dir.exists():
@@ -53,7 +59,7 @@ def load_clips_by_id():
                 data = json.load(f)
             if isinstance(data, list):
                 for clip in data:
-                    clips[clip["clip_id"]] = clip
+                    clips[(clip["clip_id"], clip.get("label", ""))] = clip
 
     return clips
 
@@ -68,19 +74,28 @@ def main():
         data = json.load(f)
     results = data.get("results", [])
 
-    clips_by_id = load_clips_by_id()
+    clips_by_key = load_clips_by_key()
 
     accepted = []
+    seen_keys        = set()   # (clip_id, user_label) — unique per recording
     skipped_error    = 0
     skipped_disagree = 0
     skipped_no_feat  = 0
+    skipped_duplicate = 0
 
     for r in results:
+        clip_id    = r.get("clip_id")
+        user_label = r.get("user_label", "")
+        key        = (clip_id, user_label)
+        if key in seen_keys:
+            skipped_duplicate += 1
+            continue
+        seen_keys.add(key)
+
         if r.get("cosmos_error"):
             skipped_error += 1
             continue
 
-        user_label    = r.get("user_label", "")
         cosmos_intl   = r.get("cosmos_intentional")
         cosmos_intent = r.get("cosmos_final_intent")
 
@@ -103,7 +118,7 @@ def main():
             label_int = 0
             # Use detected gesture type for the one-hot encoding in the feature vector;
             # fall back to SWITCH_RIGHT as a neutral default for pure non-gesture motion
-            clip         = clips_by_id.get(r["clip_id"], {})
+            clip         = clips_by_key.get((clip_id, user_label), {})
             gesture_type = clip.get("gesture_detected") or "SWITCH_RIGHT"
 
         else:
@@ -111,7 +126,7 @@ def main():
             continue
 
         # Features required — clips without them can't be used for the student model
-        clip = clips_by_id.get(r["clip_id"])
+        clip = clips_by_key.get((clip_id, user_label))
         if not clip or not clip.get("features"):
             skipped_no_feat += 1
             continue
@@ -136,7 +151,8 @@ def main():
     print(f"Calibration set written to {CALIB_PATH}")
     print(f"  Accepted:  {len(accepted)}  (intentional: {tp_count}, not intentional: {neg_count})")
     print(f"  Skipped:   {skipped_disagree} disagreements, "
-          f"{skipped_no_feat} missing features, {skipped_error} Cosmos errors")
+          f"{skipped_no_feat} missing features, {skipped_error} Cosmos errors, "
+          f"{skipped_duplicate} duplicate clip_ids")
 
     if len(accepted) < 10:
         print("\nWARNING: fewer than 10 calibration samples. "

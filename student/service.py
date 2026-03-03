@@ -19,8 +19,10 @@ from pathlib import Path
 import joblib
 import numpy as np
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)
 
 REPO_ROOT   = Path(__file__).resolve().parents[1]
 MODEL_PATH  = REPO_ROOT / "models" / "student" / "current_model.joblib"

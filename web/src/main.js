@@ -105,6 +105,7 @@ const EVENT_STATES = Object.freeze({
 const POLICY_PATHS = new Set([
   "proposed",
   "merge_inflight_verify",
+  "safe_mode_observe",
   "safe_mode_verification",
   "verifier_timeout",
   "stale_verifier_response_ignored",
@@ -374,6 +375,57 @@ function fireAsyncVerify(event) {
     });
 }
 
+// ─── Safe-mode background verification ───────────────────────────────────────
+//
+// Called after the safe-mode early-return. Fires Cosmos in the background and
+// updates the status bar when the verdict arrives. No execution ever happens.
+//
+function fireSafeModeVerify(event) {
+  const payload = {
+    event_id:         event.event_id,
+    proposed_intent:  event.intent,
+    local_confidence: event.confidence ?? 0.7,
+    ...(event.frames && event.frames.length > 0
+      ? { frames: event.frames } : {}),
+    ...(event.landmarkSummary
+      ? { landmark_summary_json: event.landmarkSummary } : {}),
+    ...(event.features
+      ? { features: event.features } : {}),
+    ...(event.student_prediction
+      ? { student_prediction: event.student_prediction } : {}),
+    policy_hint: "safe_mode_observe",
+  };
+
+  event.timestamps.verify_send_ms = nowMs();
+
+  // 30s timeout — same headroom as fireAsyncVerify
+  callVerifier(payload, 30_000)
+    .then((resp) => {
+      event.timestamps.verify_recv_ms = nowMs();
+      event.verifier_final_intent = resp.final_intent;
+      event.verifier_intentional  = resp.intentional;
+      event.verifier_confidence   = resp.confidence;
+
+      const verdict  = resp.intentional && resp.final_intent !== "NONE" ? "approved" : "rejected";
+      const confStr  = ` (${(resp.confidence ?? 0).toFixed(2)})`;
+      setStatus(`Cosmos: ${verdict} ${event.intent}${confStr}`, verdict === "approved" ? "ok" : "warn");
+
+      console.log({
+        event_id:               event.event_id,
+        safe_mode_observe:      true,
+        cosmos_intentional:     resp.intentional,
+        cosmos_final_intent:    resp.final_intent,
+        cosmos_confidence:      resp.confidence,
+        cosmos_reason_category: resp.reason_category,
+        cosmos_rationale:       resp.rationale,
+      });
+    })
+    .catch((err) => {
+      console.warn({ event_id: event.event_id, safe_mode_verify_error: err.message });
+      setStatus(`Cosmos: error — ${err.message}`, "bad");
+    });
+}
+
 // ─── Core event processing ────────────────────────────────────────────────────
 
 async function processEvent(event) {
@@ -393,6 +445,23 @@ async function processEvent(event) {
     console.log("[STUDENT] service unavailable, defaulting to execute");
   }
   const sp = event.student_prediction;
+
+  if (event.safe_mode) {
+    // ── Safe mode: observation only — show both decisions, never execute ──────
+    // Student verdict appears immediately; Cosmos verdict overwrites when it arrives.
+    const action  = sp.execute ? "execute" : "suppress";
+    const confStr = sp.model_version ? ` (${sp.confidence.toFixed(2)})` : "";
+    setStatus(`Student: ${action} ${event.intent}${confStr}`, "ok");
+    updateStudentStatus(`${action} ${event.intent}${confStr}`);
+
+    setPolicyPath(event, "safe_mode_observe");
+    setEventState(event, EVENT_STATES.REJECTED);
+    fireSafeModeVerify(event);
+    emitTerminalEventLog(event, nowMs());
+    return;
+  }
+
+  // ── Non-safe mode: original flow ─────────────────────────────────────────────
   const studentStr = sp.model_version
     ? `${sp.execute ? "EXECUTE" : "SUPPRESS"} (${sp.confidence.toFixed(2)}) ${sp.model_version} [${sp.mode}]`
     : "no model";
@@ -413,87 +482,9 @@ async function processEvent(event) {
   }
 
   try {
-    if (event.safe_mode) {
-      // ── Safe Mode: block on Cosmos response before executing ──────────────
-      // (~7s wait with real NIM; useful for demo to show Cosmos reasoning live)
-      stage = "verifier";
-      setEventState(event, EVENT_STATES.VERIFYING);
-      setPolicyPath(event, "safe_mode_verification");
-      event.timestamps.verify_send_ms = nowMs();
-      activeVerifyEventId = event.event_id;
-
-      const timeoutMs = Number.parseInt(verifierTimeoutInput.value, 10) || 800;
-      let verifierResponse;
-      try {
-        verifierResponse = await callVerifier(
-          {
-            event_id:         event.event_id,
-            proposed_intent:  event.intent,
-            local_confidence: event.confidence ?? 0.7,
-            ...(event.frames && event.frames.length > 0
-              ? { frames: event.frames } : {}),
-            ...(event.landmarkSummary
-              ? { landmark_summary_json: event.landmarkSummary } : {}),
-            ...(event.features
-              ? { features: event.features } : {}),
-            ...(event.student_prediction
-              ? { student_prediction: event.student_prediction } : {}),
-            policy_hint: "safe_mode",
-          },
-          timeoutMs,
-        );
-      } catch (err) {
-        clearActiveVerifyIfMatch(event.event_id);
-        event.timestamps.verify_recv_ms = nowMs();
-
-        if (err.name === "AbortError") {
-          if (!event.final_log_emitted && !event.superseded) {
-            setEventState(event, EVENT_STATES.TIMEOUT);
-            setPolicyPath(event, "verifier_timeout");
-            setStatus(`Verifier timeout for ${event.event_id}; execution blocked.`, "warn");
-            emitTerminalEventLog(event, event.timestamps.verify_recv_ms);
-          }
-          return;
-        }
-        throw err;
-      }
-
-      clearActiveVerifyIfMatch(event.event_id);
-      event.timestamps.verify_recv_ms = nowMs();
-      event.verifier_final_intent  = verifierResponse.final_intent;
-      event.verifier_intentional   = verifierResponse.intentional;
-      event.verifier_confidence    = verifierResponse.confidence;
-
-      if (event.state === EVENT_STATES.TIMEOUT ||
-          event.superseded ||
-          !isCurrentEvent(event)) {
-        if (!event.final_log_emitted &&
-            !event.superseded &&
-            event.state !== EVENT_STATES.TIMEOUT) {
-          setEventState(event, EVENT_STATES.REJECTED);
-          setPolicyPath(event, "stale_verifier_response_ignored");
-          emitTerminalEventLog(event, event.timestamps.verify_recv_ms);
-        }
-        return;
-      }
-
-      if (!verifierResponse.intentional || verifierResponse.final_intent === "NONE") {
-        setEventState(event, EVENT_STATES.REJECTED);
-        setPolicyPath(event, "verifier_reject");
-        setStatus(`Verifier rejected ${event.event_id}; execution blocked.`, "warn");
-        emitTerminalEventLog(event, event.timestamps.verify_recv_ms);
-        return;
-      }
-
-      approvedIntent = verifierResponse.final_intent;
-      setEventState(event, EVENT_STATES.APPROVED);
-      setPolicyPath(event, "safe_mode_verified");
-
-    } else {
-      // ── Async mode: execute immediately, verify in background ─────────────
-      setEventState(event, EVENT_STATES.APPROVED);
-      setPolicyPath(event, "unsafe_direct");
-    }
+    // ── Async mode: execute immediately, verify in background ───────────────
+    setEventState(event, EVENT_STATES.APPROVED);
+    setPolicyPath(event, "unsafe_direct");
 
     if (shouldBlockExecution(event)) {
       if (!event.final_log_emitted &&
@@ -524,9 +515,9 @@ async function processEvent(event) {
     );
     emitTerminalEventLog(event, event.timestamps.exec_recv_ms);
 
-    // ── Background Cosmos verification (async mode only) ──────────────────────
+    // ── Background Cosmos verification ────────────────────────────────────────
     // Only fire when we have real evidence frames (gesture trigger, not keyboard).
-    if (!event.safe_mode && event.frames && event.frames.length > 0) {
+    if (event.frames && event.frames.length > 0) {
       fireAsyncVerify(event);
     }
 

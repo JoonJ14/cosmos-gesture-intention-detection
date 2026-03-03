@@ -10,8 +10,12 @@ const LM_PINKY_MCP  = 17; const LM_PINKY_TIP  = 20;
 // Intentionally loose for high recall — false positives are filtered by Cosmos.
 const SWIPE_MIN_DISPLACEMENT  = 0.07; // min total (Euclidean) displacement to qualify as a swipe
 const SWIPE_MIN_X_DISPLACEMENT = 0.05; // min absolute x-displacement — prevents hand-raise triggering
+const SWIPE_MIN_PEAK_VELOCITY  = 0.03; // min peak per-frame wrist x-displacement — filters slow drift
 const SWIPE_MIN_DURATION      = 0.05; // seconds (min swipe duration — allows fast snapping swipes)
-const SWIPE_MAX_DURATION      = 2.0;  // seconds (max swipe duration)
+const SWIPE_MAX_DURATION         = 2.0;  // seconds (max swipe duration)
+const SWIPE_MIN_HAND_UPRIGHTNESS = 0.04; // wrist must be ≥ this far below middle-finger MCP (screen y) — blocks flat/resting hands
+const SWIPE_UPRIGHT_FRAMES       = 1;   // consecutive upright frames required before tracking begins
+const PALM_THUMB_MIN_SPREAD    = 0.04;  // min |thumbTip.x − indexTip.x| — thumb hidden behind hand when edge-on
 const PALM_HOLD_MS            = 150;  // stable palm hold for OPEN_MENU
 const FIST_HOLD_MS            = 50;   // min fist hold before palm transition (OPEN_MENU)
 const PALM_STABILITY          = 0.05; // max wrist drift during OPEN_MENU palm hold
@@ -20,7 +24,8 @@ const CLOSE_MAX_MS            = 1000; // total timeout for CLOSE_MENU sequence
 const CLOSE_FIST_HOLD_MS      = 75;   // fist must be held this long to fire CLOSE_MENU
 const REQUIRED_FRAMES         = 1;    // consecutive frames before accepting hand
 const MIN_HAND_SPAN           = 0.015; // ignore hands < 1.5% of frame width
-const COOLDOWN_MS             = 1200; // global cooldown after any proposal
+const COOLDOWN_MS             = 400;  // global cooldown after any proposal
+const DEBUG_GESTURES          = false; // set true to enable verbose gesture diagnostic logs
 
 // ─── Finger & palm helpers ────────────────────────────────────────────────────
 
@@ -58,6 +63,34 @@ function getHandSpan(lms) {
 // ─── Confidence scoring (weights from docs/GESTURE_DETECTION.md) ─────────────
 
 function r2(v) { return Math.round(v * 100) / 100; }
+
+// ─── Diagnostic helpers (temporary — remove after threshold tuning) ───────────
+
+// Average per-frame wrist displacement magnitude over the last 4 positions.
+function _wristVelocity(hs) {
+  const pos = hs.recentWristPositions;
+  if (pos.length < 2) return 0;
+  const recent = pos.slice(-4);
+  let sum = 0;
+  for (let i = 1; i < recent.length; i++) {
+    const dx = recent[i].x - recent[i - 1].x;
+    const dy = recent[i].y - recent[i - 1].y;
+    sum += Math.sqrt(dx * dx + dy * dy);
+  }
+  return sum / (recent.length - 1);
+}
+
+function dbg(...args) { if (DEBUG_GESTURES) console.log(...args); }
+
+// Returns the first threshold that prevents a candidate swipe from firing.
+function _swipeMissReason(totalDisp, absDx, elapsed, hasLateralComponent, peakVel) {
+  if (elapsed < SWIPE_MIN_DURATION)           return "duration_too_short";
+  if (totalDisp < SWIPE_MIN_DISPLACEMENT)     return "total_displacement_too_low";
+  if (absDx < SWIPE_MIN_X_DISPLACEMENT)      return "x_displacement_too_low";
+  if (!hasLateralComponent)                   return "lateral_component_too_low";
+  if (peakVel < SWIPE_MIN_PEAK_VELOCITY)     return "peak_velocity_too_low";
+  return null;
+}
 
 // fingerCount removed — swipe detection is pose-agnostic; pose stability weight
 // redistributed to displacement and mpConf.
@@ -161,7 +194,8 @@ function makeHandState() {
   return {
     frames:   0,       // consecutive frames this hand has been tracked
     accepted: false,   // true once frames >= REQUIRED_FRAMES
-    swipe: { state: "IDLE", startX: null, startY: null, startTs: null, trajX: [], prevX: null, prevY: null },
+    swipe: { state: "IDLE", startX: null, startY: null, startTs: null, trajX: [], startVelocity: null, uprightFrames: 0,
+      lastLms: null, lastDx: 0, lastAbsDx: 0, lastDy: 0, lastTotalDisp: 0, lastElapsed: 0, lastMpConf: 0.5, lastSpan: 0 },
     palm:  { state: "IDLE", fistStartTs: null, palmStartTs: null, startWX: null, openCount: 0 },
     close: { state: "IDLE", startTs: null, palmStartWX: null, openCount: 0, openFingers: 0, fistStartTs: null },
     recentWristPositions: [],   // last 10 {x, y} wrist positions for velocity features
@@ -171,7 +205,7 @@ function makeHandState() {
 function resetHandState(hs) {
   hs.frames   = 0;
   hs.accepted = false;
-  hs.swipe = { state: "IDLE", startX: null, startY: null, startTs: null, trajX: [], prevX: null, prevY: null };
+  hs.swipe = { state: "IDLE", startX: null, startY: null, startTs: null, trajX: [], prevX: null, prevY: null, startVelocity: null, uprightFrames: 0 };
   hs.palm  = { state: "IDLE", fistStartTs: null, palmStartTs: null, startWX: null, openCount: 0 };
   hs.close = { state: "IDLE", startTs: null, palmStartWX: null, openCount: 0, openFingers: 0, fistStartTs: null };
   hs.recentWristPositions = [];
@@ -203,37 +237,47 @@ function updateSwipe(side, hs, lms, mpConf, now) {
   const span = getHandSpan(lms);
 
   if (sw.state === "IDLE") {
-    sw.startX  = wX;
-    sw.startY  = wY;
-    sw.startTs = now;
-    sw.trajX   = [wX];
-    sw.prevX   = wX;
-    sw.prevY   = wY;
-    sw.state   = "TRACKING";
+    // ── Uprightness gate ──────────────────────────────────────────────────────
+    // wrist.y > middleMCP.y in screen coords (y↓) means the wrist is below the
+    // knuckles — the hand is upright and ready to swipe.  When the hand is flat
+    // (resting on chin) or still lifting, this value is near zero or negative.
+    const uprightness = lms[LM_WRIST].y - lms[LM_MIDDLE_MCP].y;
+
+    if (uprightness < SWIPE_MIN_HAND_UPRIGHTNESS) {
+      // Only log when the value is close to the threshold — avoids flooding the
+      // console when the hand is completely flat or pointing downward.
+      if (uprightness > -0.02) {
+        dbg(
+          `[SWIPE-GATE] orientation rejected — uprightness=${uprightness.toFixed(3)} threshold=${SWIPE_MIN_HAND_UPRIGHTNESS}`,
+        );
+      }
+      sw.uprightFrames = 0;
+      return null;
+    }
+
+    // ── Stabilization — require SWIPE_UPRIGHT_FRAMES consecutive upright frames ──
+    // Ensures the lifting motion itself (which passes uprightness briefly)
+    // doesn't immediately start a tracking window.
+    sw.uprightFrames++;
+    if (sw.uprightFrames < SWIPE_UPRIGHT_FRAMES) {
+      dbg(
+        `[SWIPE-GATE] stabilizing — ${sw.uprightFrames}/${SWIPE_UPRIGHT_FRAMES} upright frames (uprightness=${uprightness.toFixed(3)})`,
+      );
+      return null;
+    }
+
+    // Hand orientation is stable — begin displacement tracking
+    dbg(`[SWIPE-START] ${side} uprightness=${uprightness.toFixed(3)}`);
+    sw.startX        = wX;
+    sw.startY        = wY;
+    sw.startTs       = now;
+    sw.trajX         = [wX];
+    sw.startVelocity = _wristVelocity(hs);
+    sw.state         = "TRACKING";
     return null;
   }
 
   if (sw.state === "TRACKING") {
-    // Frame-to-frame delta — reset the swipe origin when motion is primarily vertical.
-    // This prevents hand-raise displacement from accumulating: as long as the hand
-    // moves more vertically than horizontally, the origin slides forward and the
-    // measured displacement stays near zero. The moment the hand moves sideways,
-    // the origin is fixed and displacement accumulates toward firing.
-    if (sw.prevX !== null) {
-      const frameDx   = wX - sw.prevX;
-      const frameDy   = wY - sw.prevY;
-      const frameDisp = Math.sqrt(frameDx * frameDx + frameDy * frameDy);
-      if (frameDisp > 0.005 && Math.abs(frameDy) > Math.abs(frameDx)) {
-        console.log("[SWIPE] vertical motion, resetting origin");
-        sw.startX  = wX;
-        sw.startY  = wY;
-        sw.startTs = now;
-        sw.trajX   = [wX];
-      }
-    }
-    sw.prevX = wX;
-    sw.prevY = wY;
-
     sw.trajX.push(wX);
     const elapsed = (now - sw.startTs) / 1000;
     const dx      = wX - sw.startX;   // positive = screen-left motion
@@ -242,14 +286,32 @@ function updateSwipe(side, hs, lms, mpConf, now) {
     const screenDir = dx < 0 ? "RIGHT" : "LEFT";
 
     const absDx = Math.abs(dx);
-    console.log(
+
+    // Snapshot for last-frame fire — overwritten every tracking frame so it always
+    // reflects the most recent displacement when the hand disappears.
+    sw.lastDx        = dx;
+    sw.lastAbsDx     = absDx;
+    sw.lastDy        = dy;
+    sw.lastTotalDisp = totalDisp;
+    sw.lastElapsed   = elapsed;
+    sw.lastMpConf    = mpConf;
+    sw.lastSpan      = span;
+    sw.lastLms       = lms;
+
+    dbg(
       `[SWIPE] tracking: ${side},` +
       ` dx: ${dx.toFixed(3)}, absDx: ${absDx.toFixed(3)}, dy: ${dy.toFixed(3)}, total: ${totalDisp.toFixed(3)},` +
       ` screenDir: ${screenDir}, duration: ${elapsed.toFixed(3)}s`,
     );
 
     if (elapsed > SWIPE_MAX_DURATION) {
-      sw.state = "IDLE";
+      if (totalDisp > 0.02) {
+        dbg(
+          `[SWIPE-MISS] disp=${totalDisp.toFixed(2)} x=${absDx.toFixed(2)} y=${Math.abs(dy).toFixed(2)} dur=${elapsed.toFixed(2)}s reason=timeout`,
+        );
+      }
+      sw.state         = "IDLE";
+      sw.uprightFrames = 0;
       return null;
     }
 
@@ -258,11 +320,24 @@ function updateSwipe(side, hs, lms, mpConf, now) {
     // displacement (rejects nearly-vertical motions).
     const hasLateralComponent = totalDisp > 0 && absDx / totalDisp >= 0.40;
 
-    if (totalDisp >= SWIPE_MIN_DISPLACEMENT && absDx >= SWIPE_MIN_X_DISPLACEMENT && elapsed >= SWIPE_MIN_DURATION && hasLateralComponent) {
+    // Peak per-frame x-displacement across the swipe trajectory — proxy for wrist speed.
+    let peakVel = 0;
+    for (let i = 1; i < sw.trajX.length; i++) {
+      peakVel = Math.max(peakVel, Math.abs(sw.trajX[i] - sw.trajX[i - 1]));
+    }
+
+    if (totalDisp >= SWIPE_MIN_DISPLACEMENT && absDx >= SWIPE_MIN_X_DISPLACEMENT && elapsed >= SWIPE_MIN_DURATION && hasLateralComponent && peakVel >= SWIPE_MIN_PEAK_VELOCITY) {
       // Direction from x-component sign (raw x decreasing = screen-right = SWITCH_LEFT)
       const isRight = dx < 0;
       const conf = swipeConfidence(mpConf, totalDisp, elapsed, span);
-      sw.state = "IDLE";
+      const _vel = _wristVelocity(hs);
+      const _wasStationary = sw.startVelocity !== null && sw.startVelocity < 0.003;
+      dbg(
+        `[SWIPE-HIT] disp=${totalDisp.toFixed(2)} x=${absDx.toFixed(2)} y=${Math.abs(dy).toFixed(2)} dur=${elapsed.toFixed(2)}s` +
+        ` vel=${_vel.toFixed(3)} peakVel=${peakVel.toFixed(3)} stationary_before=${_wasStationary}`,
+      );
+      sw.state         = "IDLE";
+      sw.uprightFrames = 0;
       return {
         intent: isRight ? "SWITCH_LEFT" : "SWITCH_RIGHT",
         confidence: conf,
@@ -275,6 +350,16 @@ function updateSwipe(side, hs, lms, mpConf, now) {
           palm_facing_camera: isPalmFacing(lms),
         },
       };
+    }
+
+    // [DIAGNOSTIC] Log near-threshold misses every frame — data for tuning thresholds
+    if (totalDisp > 0.02) {
+      const reason = _swipeMissReason(totalDisp, absDx, elapsed, hasLateralComponent, peakVel);
+      if (reason) {
+        dbg(
+          `[SWIPE-MISS] disp=${totalDisp.toFixed(2)} x=${absDx.toFixed(2)} y=${Math.abs(dy).toFixed(2)} dur=${elapsed.toFixed(2)}s reason=${reason}`,
+        );
+      }
     }
   }
   return null;
@@ -293,11 +378,12 @@ function updateSwipe(side, hs, lms, mpConf, now) {
 //
 function updatePalm(side, hs, lms, mpConf, now) {
   console.log("[OPEN_MENU] entered updatePalm");
-  const p       = hs.palm;
-  const fingers = countExtendedFingers(lms);
-  const facing  = isPalmFacing(lms);
-  const span    = getHandSpan(lms);
-  const wX      = lms[LM_WRIST].x;
+  const p          = hs.palm;
+  const fingers    = countExtendedFingers(lms);
+  const facing     = isPalmFacing(lms);
+  const span       = getHandSpan(lms);
+  const wX          = lms[LM_WRIST].x;
+  const thumbSpread = Math.abs(lms[LM_THUMB_TIP].x - lms[LM_INDEX_TIP].x);
   // Loosened: ≥3 fingers extended (partial palm counts)
   const isOpen  = fingers >= 3 && facing;
   // Loosened: ≤3 fingers extended catches loose/relaxed hands, not just tight fists
@@ -320,11 +406,18 @@ function updatePalm(side, hs, lms, mpConf, now) {
       return null;
     }
     if (isOpen && fistDurMs >= FIST_HOLD_MS) {
-      // Fist was held long enough, and the hand just opened → start palm phase
-      p.palmStartTs = now;
-      p.startWX     = wX;
-      p.openCount   = 1;
-      p.state       = "PALM_OPENED";
+      if (thumbSpread < PALM_THUMB_MIN_SPREAD) {
+        // Thumb hidden behind hand — edge-on
+        dbg(`[PALM-GATE] OPEN_MENU: FIST→PALM rejected (thumbSpread=${thumbSpread.toFixed(3)} threshold=${PALM_THUMB_MIN_SPREAD})`);
+        p.state = "IDLE";
+      } else {
+        // Fist held long enough + thumb visible → start palm phase
+        dbg(`[PALM-GATE] OPEN_MENU: FIST→PALM passed (thumbSpread=${thumbSpread.toFixed(3)})`);
+        p.palmStartTs = now;
+        p.startWX     = wX;
+        p.openCount   = 1;
+        p.state       = "PALM_OPENED";
+      }
     } else {
       // Ambiguous hand pose, or fist wasn't held long enough → reset
       p.state = "IDLE";
@@ -334,6 +427,12 @@ function updatePalm(side, hs, lms, mpConf, now) {
 
   if (p.state === "PALM_OPENED") {
     if (!isOpen) {
+      p.state = "IDLE";
+      return null;
+    }
+    if (thumbSpread < PALM_THUMB_MIN_SPREAD) {
+      // Thumb hidden — hand went edge-on during hold
+      dbg(`[PALM-GATE] OPEN_MENU: hold rejected (thumbSpread=${thumbSpread.toFixed(3)} threshold=${PALM_THUMB_MIN_SPREAD})`);
       p.state = "IDLE";
       return null;
     }
@@ -381,11 +480,12 @@ function updatePalm(side, hs, lms, mpConf, now) {
 //
 function updateClose(side, hs, lms, mpConf, now) {
   console.log("[CLOSE_MENU] entered updateClose");
-  const c       = hs.close;
-  const fingers = countExtendedFingers(lms);
-  const facing  = isPalmFacing(lms);
-  const span    = getHandSpan(lms);
-  const wX      = lms[LM_WRIST].x;
+  const c          = hs.close;
+  const fingers    = countExtendedFingers(lms);
+  const facing     = isPalmFacing(lms);
+  const span       = getHandSpan(lms);
+  const wX          = lms[LM_WRIST].x;
+  const thumbSpread = Math.abs(lms[LM_THUMB_TIP].x - lms[LM_INDEX_TIP].x);
   // Loosened: ≥3 fingers (partial palm) and ≤3 fingers (loose fist)
   const isOpen  = fingers >= 3 && facing;
   const isFist  = fingers <= 3;
@@ -401,6 +501,12 @@ function updateClose(side, hs, lms, mpConf, now) {
           c.openCount = 0;  // reset so CLOSE_MENU starts fresh after OPEN_MENU finishes
           return null;
         }
+        if (thumbSpread < PALM_THUMB_MIN_SPREAD) {
+          // Thumb hidden — hand is edge-on
+          dbg(`[PALM-GATE] CLOSE_MENU: OPEN_SEEN rejected (thumbSpread=${thumbSpread.toFixed(3)} threshold=${PALM_THUMB_MIN_SPREAD})`);
+          return null;  // keep openCount so the transition fires once palm faces camera
+        }
+        dbg(`[PALM-GATE] CLOSE_MENU: OPEN_SEEN passed (thumbSpread=${thumbSpread.toFixed(3)})`);
         c.startTs     = now;
         c.palmStartWX = wX;
         c.openFingers = fingers;
@@ -568,14 +674,14 @@ export function startHandsCameraLoop(videoElement, hands) {
  */
 export function proposeGestureFromLandmarks(results) {
   // ── Top-level frame trace (always fires, even if no hands / in cooldown) ──
-  console.log(`[GESTURE FRAME] hands detected: ${results.multiHandLandmarks?.length || 0}`);
+  dbg(`[GESTURE FRAME] hands detected: ${results.multiHandLandmarks?.length || 0}`);
 
   const now = performance.now();
 
   // Global cooldown — block all proposals for 1.5s after the last one
   const cooldownRemaining = COOLDOWN_MS - (now - lastProposalTs);
   if (cooldownRemaining > 0) {
-    console.log(`[GESTURE FRAME] in cooldown, ${Math.round(cooldownRemaining)}ms remaining`);
+    dbg(`[GESTURE FRAME] in cooldown, ${Math.round(cooldownRemaining)}ms remaining`);
     return null;
   }
 
@@ -586,18 +692,18 @@ export function proposeGestureFromLandmarks(results) {
 
   for (let i = 0; i < hands.length; i++) {
     const h = handedness[i];
-    if (!h) { console.log(`[GESTURE FRAME] hand[${i}]: no handedness entry, skipping`); continue; }
+    if (!h) { dbg(`[GESTURE FRAME] hand[${i}]: no handedness entry, skipping`); continue; }
     const side   = h.label;                   // "Left" | "Right" per MediaPipe
     const mpConf = h.score ?? 0.5;
     const lms    = hands[i];
 
-    if (side !== "Left" && side !== "Right") { console.log(`[GESTURE FRAME] hand[${i}]: unknown side "${side}", skipping`); continue; }
-    if (!lms || lms.length < 21) { console.log(`[GESTURE FRAME] hand[${i}]: bad landmarks (len=${lms?.length}), skipping`); continue; }
+    if (side !== "Left" && side !== "Right") { dbg(`[GESTURE FRAME] hand[${i}]: unknown side "${side}", skipping`); continue; }
+    if (!lms || lms.length < 21) { dbg(`[GESTURE FRAME] hand[${i}]: bad landmarks (len=${lms?.length}), skipping`); continue; }
 
     // Ignore hands that are too small / too far from camera
     const span = getHandSpan(lms);
     if (span < MIN_HAND_SPAN) {
-      console.log(`[GESTURE FRAME] hand[${i}] ${side}: span ${span.toFixed(3)} < MIN_HAND_SPAN, skipping`);
+      dbg(`[GESTURE FRAME] hand[${i}] ${side}: span ${span.toFixed(3)} < MIN_HAND_SPAN, skipping`);
       presentSides.add(side);  // still counts as present to prevent state reset
       continue;
     }
@@ -610,7 +716,7 @@ export function proposeGestureFromLandmarks(results) {
     hs.frames++;
     if (hs.frames >= REQUIRED_FRAMES) hs.accepted = true;
     if (!hs.accepted) {
-      console.log(`[GESTURE FRAME] hand[${i}] ${side}: entry guard frames=${hs.frames}/${REQUIRED_FRAMES}, not yet accepted`);
+      dbg(`[GESTURE FRAME] hand[${i}] ${side}: entry guard frames=${hs.frames}/${REQUIRED_FRAMES}, not yet accepted`);
       continue;
     }
 
@@ -633,20 +739,21 @@ export function proposeGestureFromLandmarks(results) {
     const openMenuActive  = hs.palm.state === "FIST_DETECTED" || hs.palm.state === "PALM_OPENED";
 
     if (closeIsTracking && !openMenuActive) {
-      console.log(`[GESTURE FRAME] ${side}: closeIsTracking (${hs.close.state}), palm IDLE → suppressing OPEN_MENU`);
+      dbg(`[GESTURE FRAME] ${side}: closeIsTracking (${hs.close.state}), palm IDLE → suppressing OPEN_MENU`);
       hs.palm.state       = "IDLE";
       hs.palm.fistStartTs = null;
       hs.palm.palmStartTs = null;
     }
 
-    console.log(`[GESTURE FRAME] ${side}: accepted, swipe=${hs.swipe.state}, close=${hs.close.state}, palm=${hs.palm.state}, closeIsTracking=${closeIsTracking}, openMenuActive=${openMenuActive}`);
+    dbg(`[GESTURE FRAME] ${side}: accepted, swipe=${hs.swipe.state}, close=${hs.close.state}, palm=${hs.palm.state}, closeIsTracking=${closeIsTracking}, openMenuActive=${openMenuActive}`);
 
     // Suppress swipe when the user is mid-open-menu or mid-close-menu sequence.
     // Any lateral hand motion during those sequences is part of the gesture, not a swipe.
     const swipeSuppressed = hs.palm.state === "PALM_OPENED" || hs.close.state === "FIST_SEEN";
     if (swipeSuppressed) {
       console.log("[SWIPE] suppressed — open/close menu active");
-      hs.swipe.state = "IDLE";  // reset so swipe doesn't accumulate displacement during suppression
+      hs.swipe.state        = "IDLE";  // reset so swipe doesn't accumulate displacement during suppression
+      hs.swipe.uprightFrames = 0;      // require re-stabilization before next tracking window
     }
 
     let proposal = swipeSuppressed ? null : updateSwipe(side, hs, lms, mpConf, now);
@@ -684,9 +791,42 @@ export function proposeGestureFromLandmarks(results) {
     }
   }
 
-  // Reset state for any hand side not seen this frame
+  // For any hand that vanished this frame, check if it was mid-swipe with enough
+  // displacement to fire.  Fast swipes often drop out of MediaPipe tracking at
+  // peak velocity — this catches them before the accumulated displacement is lost.
   for (const side of ["Left", "Right"]) {
-    if (!presentSides.has(side)) resetHandState(perHand[side]);
+    if (presentSides.has(side)) continue;
+
+    const hs = perHand[side];
+    const sw = hs.swipe;
+
+    if (sw.state === "TRACKING" && sw.lastTotalDisp >= 0.05 && sw.lastAbsDx >= 0.04) {
+      const isRight = sw.lastDx < 0;
+      const intent  = isRight ? "SWITCH_LEFT" : "SWITCH_RIGHT";
+      const conf    = swipeConfidence(sw.lastMpConf, sw.lastTotalDisp, sw.lastElapsed, sw.lastSpan);
+      const landmarkSummary = {
+        handedness:         side,
+        wrist_trajectory_x: [...sw.trajX],
+        displacement_pct:   r2(sw.lastTotalDisp),
+        duration_s:         r2(sw.lastElapsed),
+        fingers_extended:   sw.lastLms ? countExtendedFingers(sw.lastLms) : 0,
+        palm_facing_camera: sw.lastLms ? isPalmFacing(sw.lastLms) : false,
+      };
+      dbg(
+        `[SWIPE-LASTFRAME] ${side} intent=${intent}` +
+        ` disp=${sw.lastTotalDisp.toFixed(2)} x=${sw.lastAbsDx.toFixed(2)} y=${Math.abs(sw.lastDy).toFixed(2)} dur=${sw.lastElapsed.toFixed(2)}s`,
+      );
+      const syntheticProposal = { intent, confidence: conf, landmarkSummary };
+      const features = sw.lastLms
+        ? extractFeatures(sw.lastLms, side, intent, syntheticProposal, hs)
+        : null;
+      lastProposalTs = now;
+      resetHandState(perHand.Left);
+      resetHandState(perHand.Right);
+      return { intent, confidence: conf, landmarks: sw.lastLms, handedness: side, landmarkSummary, features };
+    }
+
+    resetHandState(hs);
   }
 
   return null;

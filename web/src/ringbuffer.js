@@ -7,14 +7,14 @@
  *   getEvidenceWindow(n)  — returns n evenly-sampled base64 strings (no data: prefix)
  */
 
-const BUFFER_SIZE = 30;
+const BUFFER_SIZE = 90;
 const _buf = new Array(BUFFER_SIZE).fill(null);
 let _head = 0;   // next write slot
 let _size = 0;   // valid entries in buffer (0..BUFFER_SIZE)
 
 // Persistent canvas — allocate once, reuse every frame to avoid GC pressure
 const _canvas = document.createElement("canvas");
-_canvas.width  = 320;
+_canvas.width = 320;
 _canvas.height = 180;
 const _ctx = _canvas.getContext("2d");
 
@@ -29,10 +29,10 @@ const _ctx = _canvas.getContext("2d");
 export function pushFrame(videoElement, multiHandLandmarks, multiHandedness) {
   _ctx.drawImage(videoElement, 0, 0, 320, 180);
   _buf[_head] = {
-    timestamp:    performance.now(),
+    timestamp: performance.now(),
     frameDataUrl: _canvas.toDataURL("image/jpeg", 0.7),
-    landmarks:    multiHandLandmarks,
-    handedness:   multiHandedness,
+    landmarks: multiHandLandmarks,
+    handedness: multiHandedness,
   };
   _head = (_head + 1) % BUFFER_SIZE;
   if (_size < BUFFER_SIZE) _size++;
@@ -48,7 +48,7 @@ export function pushFrame(videoElement, multiHandLandmarks, multiHandedness) {
  */
 export function getEvidenceWindow(n = 8) {
   if (_size === 0) return [];
-  const count    = _size;
+  const count = _size;
   const oldestIdx = count < BUFFER_SIZE ? 0 : _head;
 
   if (n === 1) {
@@ -57,9 +57,9 @@ export function getEvidenceWindow(n = 8) {
   }
 
   const result = [];
-  const step   = count > 1 ? (count - 1) / (Math.min(n, count) - 1) : 0;
+  const step = count > 1 ? (count - 1) / (Math.min(n, count) - 1) : 0;
   for (let i = 0; i < Math.min(n, count); i++) {
-    const pos   = Math.min(count - 1, Math.round(i * step));
+    const pos = Math.min(count - 1, Math.round(i * step));
     const entry = _buf[(oldestIdx + pos) % BUFFER_SIZE];
     if (entry) result.push(_b64(entry));
   }
