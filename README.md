@@ -104,16 +104,6 @@ Evaluated against 151 labeled clips (70 true positives + 81 hard negatives acros
 
 ## Why Cosmos Is Necessary (Not Optional)
 
-We demonstrate Cosmos's value with **8 hard negative scenarios** — motions that a landmark-based detector proposes as gestures, but Cosmos correctly rejects:
-
-| Category | Scenario | Why heuristics fail |
-|----------|----------|---------------------|
-| Self-grooming | Scratch head, scratch nose, rub eye | Same hand trajectory as a swipe |
-| Reaching | Wipe monitor, reach to side, catch a fly | Same displacement and velocity |
-| Conversation | Wave while talking, receive item from someone | Same hand shape and motion |
-
-**Results:** Without Cosmos, the state machine fires on all candidate motions including incidental ones (0% rejection). With Cosmos verification, 90.1% of hard negatives are correctly rejected (73/81 across 6 negative categories). The hardest category (reaching motions) achieves 25% rejection — these are kinematically identical to real swipes and represent the genuine frontier of VLM-based discrimination.
-
 ### The Scalability Problem
 
 Traditional hard-coded approaches require engineering negative-case rules for every gesture independently. Each new gesture multiplies the rules needed:
@@ -160,6 +150,16 @@ One model handles everything. Adding gesture N+1 = one sentence in the prompt.
 Adding gesture N+1 means adding one sentence to the prompt. Cosmos reasons about *intent* — whether the user meant to issue a command — rather than pattern-matching against a growing library of exceptions. This applies beyond gestures to any domain where distinguishing intentional actions from incidental motion is the core challenge: robotics safety, automotive controls, smart home, AR/VR input.
 
 The student model solves the latency problem: Cosmos labels events during normal use (5.8–8.4s), and the student learns to replicate those decisions locally in <10ms.
+
+We demonstrate Cosmos's value with **8 hard negative scenarios** — motions that a landmark-based detector proposes as gestures, but Cosmos correctly rejects:
+
+| Category | Scenario | Why heuristics fail |
+|----------|----------|---------------------|
+| Self-grooming | Scratch head, scratch nose, rub eye | Same hand trajectory as a swipe |
+| Reaching | Wipe monitor, reach to side, catch a fly | Same displacement and velocity |
+| Conversation | Wave while talking, receive item from someone | Same hand shape and motion |
+
+**Results:** Without Cosmos, the state machine fires on all candidate motions including incidental ones (0% rejection). With Cosmos verification, 90.1% of hard negatives are correctly rejected (73/81 across 6 negative categories). The hardest category (reaching motions) achieves 25% rejection — these are kinematically identical to real swipes and represent the genuine frontier of VLM-based discrimination.
 
 Beyond accuracy, Cosmos also delivers **dramatically faster iteration cycles** than traditional ML — a prompt change can be validated in minutes rather than after hours of retraining. See [Rapid Iteration via Prompt Engineering](#rapid-iteration-via-prompt-engineering) below.
 
