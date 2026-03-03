@@ -31,20 +31,36 @@ Cosmos earns its role by solving what heuristics fundamentally cannot: distingui
 │               Web App (JS, :5173)             │
 │  MediaPipe Hands · Gesture state machine      │
 │  Ring buffer · Confidence scoring · Overlay   │
-└──────────────┬────────────────────────────────┘
-               │
-     ┌─────────┴──────────┐
-     │                    │
-     v                    v
-┌──────────────┐   ┌───────────────────────┐
-│ Executor     │   │ Cosmos Verifier       │
-│ (PY, :8787)  │   │ (PY, :8788)           │
-│ xdotool /    │   │ Calls Cosmos Reason 2 │
-│ osascript    │   │ NIM on DGX Spark      │
-└──────────────┘   └───────────────────────┘
+└───────────────────────┬───────────────────────┘
+                        │ gesture proposals
+                        v
+    ┌───────────────────────────────────────────┐
+    │       Verifier Service (PY, :8788)        │
+    │                                           │
+    │  ┌─────────────────────────────────────┐  │
+    │  │  Student ML Model (local)           │  │
+    │  │  Lightweight intent classifier      │  │
+    │  └──────────────┬──────────────────────┘  │
+    │     Phase 1: all proposals → Cosmos       │
+    │     Phase 2: ~50% once agreement > 90%    │
+    │     Phase 3: ~10% spot-check, > 95%       │
+    │                 │                         │
+    │                 v                         │
+    │  ┌─────────────────────────────────────┐  │
+    │  │  Cosmos Reason 2 — DGX Spark (GB10) │  │
+    │  │  Teacher: labels every proposal     │  │
+    │  │  Labels feed back → trains Student  │  │
+    │  └─────────────────────────────────────┘  │
+    └────────────────────┬──────────────────────┘
+                         │ intentional=True
+                         v
+              ┌──────────────────────┐
+              │  Executor (PY, :8787)│
+              │  xdotool / osascript │
+              └──────────────────────┘
 ```
 
-**Decision flow:** High-confidence gestures execute directly. Ambiguous cases go to Cosmos first. Low-confidence signals are ignored. See [Architecture Diagrams](docs/ARCHITECTURE_DIAGRAMS.md) for full details.
+**Decision flow:** Gesture proposals from the web app pass through the Student ML Model, which routes a sampled percentage to Cosmos Reason 2 for labeling. Cosmos labels feed back to continuously retrain the Student, reducing Cosmos sampling over time (Phase 1→3). Verified intentional gestures are forwarded to the Executor for OS action. See [Architecture Diagrams](docs/ARCHITECTURE_DIAGRAMS.md) for full details.
 
 ## Gestures
 
@@ -156,7 +172,7 @@ Open `http://127.0.0.1:5173`, allow webcam access. Press keys `1`–`4` to test 
 - **MacBook Air** (Apple Silicon) — development and secondary demo platform
 - USB webcam on DGX Spark; built-in camera on Mac
 
-## Teacher-Student Feedback Loop (Option 2 — Core Deliverable)
+## Teacher-Student Feedback Loop
 
 The gesture state machine is intentionally **high-recall / low-precision**: it fires on many candidate gestures, including false positives. Cosmos acts as the **teacher**, labeling every proposal with ground-truth intent via visual reasoning. A lightweight local **student classifier** (logistic regression or small random forest) trains on those labels and takes over filtering in real time.
 
@@ -167,7 +183,7 @@ The gesture state machine is intentionally **high-recall / low-precision**: it f
 
 A small random percentage always goes to Cosmos (never 0%) to detect student blind spots.
 
-See [Option 2 Design & Risks](docs/OPTION2_RISKS_AND_MITIGATIONS.md) for the full design, failure modes, and safeguards.
+See [Teacher-Student Loop Design & Risks](docs/OPTION2_RISKS_AND_MITIGATIONS.md) for the full design, failure modes, and safeguards.
 
 ## Beyond Desktop Gestures
 
@@ -188,7 +204,7 @@ Desktop gesture control is a proof of concept. The core architecture — **VLM-b
 | [Gesture Detection](docs/GESTURE_DETECTION.md) | Detection algorithm, thresholds, state machines |
 | [Cosmos Prompt & Schema](docs/COSMOS_PROMPT_AND_SCHEMA.md) | Prompt template, JSON schema, integration guide |
 | [Latency Policy](docs/LATENCY_AND_AMBIGUOUS_POLICY.md) | Timeout, merge/supersede, instrumentation |
-| [Option 2 Risks](docs/OPTION2_RISKS_AND_MITIGATIONS.md) | Teacher-student loop design and safeguards |
+| [Teacher-Student Loop Risks](docs/OPTION2_RISKS_AND_MITIGATIONS.md) | Teacher-student loop design and safeguards |
 | [Architecture Diagrams](docs/ARCHITECTURE_DIAGRAMS.md) | Visual diagrams for all system flows |
 | [Build Status](docs/STATUS.md) | Current state, priorities, session handoff |
 | [Performance Tracking](docs/COSMOS_PERFORMANCE_TRACKING.md) | Per-iteration Cosmos metrics and category breakdowns |
