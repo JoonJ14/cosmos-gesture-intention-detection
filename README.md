@@ -38,16 +38,16 @@ Cosmos earns its role by solving what heuristics fundamentally cannot: distingui
     │       Verifier Service (PY, :8788)        │
     │                                           │
     │  ┌─────────────────────────────────────┐  │
-    │  │  Student ML Model (local)           │  │
-    │  │  Lightweight intent classifier      │  │
-    │  └──────────────┬──────────────────────┘  │
-    │     Phase 1: all proposals → Cosmos       │
-    │     Phase 2: ~50% once agreement > 90%    │
-    │     Phase 3: ~10% spot-check, > 95%       │
-    │                 │                         │
-    │                 v                         │
-    │  ┌─────────────────────────────────────┐  │
-    │  │  Cosmos Reason 2 — DGX Spark (GB10) │  │
+    │  │  Student ML Model (local)           │  │◄──────────────────────────┐
+    │  │  Lightweight intent classifier      │  │                           │
+    │  └──────────────┬──────────────────────┘  │  feedback loop:           │
+    │     Phase 1: all proposals → Cosmos       │  trains lightweight        │
+    │     Phase 2: ~50% once agreement > 90%    │  student model over time   │
+    │     Phase 3: ~10% spot-check, > 95%       │  to improve performance    │
+    │                 │                         │                           │
+    │                 v                         │                           │
+    │  ┌─────────────────────────────────────┐  │                           │
+    │  │  Cosmos Reason 2 — DGX Spark (GB10) │  │───────────────────────────┘
     │  │  Teacher: labels every proposal     │  │
     │  │  Labels feed back → trains Student  │  │
     │  └─────────────────────────────────────┘  │
