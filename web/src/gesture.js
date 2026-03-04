@@ -16,6 +16,7 @@ const SWIPE_MAX_DURATION         = 2.0;  // seconds (max swipe duration)
 const SWIPE_MIN_HAND_UPRIGHTNESS = 0.08; // wrist must be ≥ this far below middle-finger MCP (screen y) — blocks flat/resting hands
 const SWIPE_UPRIGHT_FRAMES       = 3;   // consecutive upright frames required before tracking begins
 const PALM_THUMB_MIN_SPREAD    = 0.04;  // min |thumbTip.x − indexTip.x| — thumb hidden behind hand when edge-on
+const MENU_MIN_VERTICAL_SPAN   = 0.06;  // min y-range across all landmarks — flat/resting hand has near-zero vertical span
 const PALM_HOLD_MS            = 150;  // stable palm hold for OPEN_MENU
 const FIST_HOLD_MS            = 50;   // min fist hold before palm transition (OPEN_MENU)
 const PALM_STABILITY          = 0.05; // max wrist drift during OPEN_MENU palm hold
@@ -379,7 +380,6 @@ function updateSwipe(side, hs, lms, mpConf, now) {
 //   PALM_OPENED:   Partial or full palm held stable for ≥PALM_HOLD_MS → emit OPEN_MENU.
 //
 function updatePalm(side, hs, lms, mpConf, now) {
-  console.log("[OPEN_MENU] entered updatePalm");
   const p          = hs.palm;
   const fingers    = countExtendedFingers(lms);
   const facing     = isPalmFacing(lms);
@@ -392,6 +392,10 @@ function updatePalm(side, hs, lms, mpConf, now) {
   const isFist  = fingers <= 3;
 
   if (p.state === "IDLE") {
+    // ── Palm-facing gate — flat/resting hand has near-zero vertical span ────
+    const verticalSpan = Math.max(...lms.map(l => l.y)) - Math.min(...lms.map(l => l.y));
+    if (verticalSpan < MENU_MIN_VERTICAL_SPAN) return null;
+
     if (isFist) {
       p.fistStartTs = now;
       p.state       = "FIST_DETECTED";
@@ -481,7 +485,6 @@ function updatePalm(side, hs, lms, mpConf, now) {
 // State: IDLE → OPEN_SEEN → FIST_SEEN → (proposal emitted) → IDLE
 //
 function updateClose(side, hs, lms, mpConf, now) {
-  console.log("[CLOSE_MENU] entered updateClose");
   const c          = hs.close;
   const fingers    = countExtendedFingers(lms);
   const facing     = isPalmFacing(lms);
@@ -493,6 +496,10 @@ function updateClose(side, hs, lms, mpConf, now) {
   const isFist  = fingers <= 3;
 
   if (c.state === "IDLE") {
+    // ── Palm-facing gate — flat/resting hand has near-zero vertical span ────
+    const verticalSpan = Math.max(...lms.map(l => l.y)) - Math.min(...lms.map(l => l.y));
+    if (verticalSpan < MENU_MIN_VERTICAL_SPAN) return null;
+
     if (isOpen) {
       c.openCount++;
       if (c.openCount >= REQUIRED_FRAMES) {
