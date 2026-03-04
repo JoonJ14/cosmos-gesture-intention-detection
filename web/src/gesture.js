@@ -821,20 +821,13 @@ export function proposeGestureFromLandmarks(results) {
 
       const xRatio = sw.lastTotalDisp > 0 ? sw.lastAbsDx / sw.lastTotalDisp : 0;
 
-      // Recompute peak velocity from trajectory — same calculation as main path
-      let lastPeakVel = 0;
-      for (let i = 1; i < sw.trajX.length; i++) {
-        lastPeakVel = Math.max(lastPeakVel, Math.abs(sw.trajX[i] - sw.trajX[i - 1]));
-      }
+      // Note: peak velocity is NOT checked here. LASTFRAME fires after MediaPipe
+      // loses the hand, so velocity has already decayed. x-displacement (0.08)
+      // cleanly separates chin drops (0.05-0.06) from real swipes (0.12-0.30).
 
       if (xRatio < 0.4) {
         console.log(
           `[SWIPE-REJECTED] lastframe vertical motion: x=${sw.lastAbsDx.toFixed(3)} y=${Math.abs(sw.lastDy).toFixed(3)} ratio=${xRatio.toFixed(3)}`,
-        );
-        // fall through to resetHandState below
-      } else if (lastPeakVel < SWIPE_MIN_PEAK_VELOCITY) {
-        console.log(
-          `[SWIPE-REJECTED] lastframe low peak velocity: vel=${lastPeakVel.toFixed(3)} x=${sw.lastAbsDx.toFixed(3)}`,
         );
         // fall through to resetHandState below
       } else {
@@ -852,7 +845,7 @@ export function proposeGestureFromLandmarks(results) {
         dbg(
           `[SWIPE-LASTFRAME] ${side} intent=${intent}` +
           ` disp=${sw.lastTotalDisp.toFixed(2)} x=${sw.lastAbsDx.toFixed(2)} y=${Math.abs(sw.lastDy).toFixed(2)}` +
-          ` dur=${sw.lastElapsed.toFixed(2)}s vel=${lastPeakVel.toFixed(3)}`,
+          ` dur=${sw.lastElapsed.toFixed(2)}s`,
         );
         const syntheticProposal = { intent, confidence: conf, landmarkSummary };
         const features = sw.lastLms
