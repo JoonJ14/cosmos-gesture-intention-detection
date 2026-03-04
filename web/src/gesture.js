@@ -25,7 +25,7 @@ const CLOSE_FIST_HOLD_MS      = 75;   // fist must be held this long to fire CLO
 const REQUIRED_FRAMES         = 1;    // consecutive frames before accepting hand
 const MIN_HAND_SPAN           = 0.015; // ignore hands < 1.5% of frame width
 const COOLDOWN_MS             = 1000; // global cooldown after any proposal
-const DEBUG_GESTURES          = true; // set true to enable verbose gesture diagnostic logs
+const DEBUG_GESTURES          = false; // set true to enable verbose gesture diagnostic logs
 
 // ─── Finger & palm helpers ────────────────────────────────────────────────────
 
@@ -246,7 +246,6 @@ function updateSwipe(side, hs, lms, mpConf, now) {
     const gatePassed = uprightness >= SWIPE_MIN_HAND_UPRIGHTNESS;
     if (!gatePassed) {
       sw.uprightFrames = 0;
-      console.log(`[SWIPE] uprightness: ${uprightness.toFixed(3)}, passed: false, consecutive: 0/${SWIPE_UPRIGHT_FRAMES}`);
       return null;
     }
 
@@ -254,7 +253,6 @@ function updateSwipe(side, hs, lms, mpConf, now) {
     // Ensures the lifting motion itself (which passes uprightness briefly)
     // doesn't immediately start a tracking window.
     sw.uprightFrames++;
-    console.log(`[SWIPE] uprightness: ${uprightness.toFixed(3)}, passed: true, consecutive: ${sw.uprightFrames}/${SWIPE_UPRIGHT_FRAMES}`);
     if (sw.uprightFrames < SWIPE_UPRIGHT_FRAMES) {
       return null;
     }
@@ -692,9 +690,7 @@ export function proposeGestureFromLandmarks(results) {
       const _h   = (results.multiHandedness || [])[_i];
       if (!_h || !_lms || _lms.length < 21) continue;
       const _u      = _lms[LM_WRIST].y - _lms[LM_MIDDLE_MCP].y;
-      const _passed = _u >= SWIPE_MIN_HAND_UPRIGHTNESS;
-      const _frames = perHand[_h.label]?.swipe?.uprightFrames ?? 0;
-      console.log(`[SWIPE] uprightness: ${_u.toFixed(3)}, passed: ${_passed}, consecutive: ${_frames}/${SWIPE_UPRIGHT_FRAMES} [cooldown]`);
+      // uprightness logging removed (debug only)
     }
     return null;
   }
