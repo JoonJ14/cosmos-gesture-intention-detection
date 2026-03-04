@@ -13,8 +13,8 @@ const SWIPE_MIN_X_DISPLACEMENT = 0.05; // min absolute x-displacement — preven
 const SWIPE_MIN_PEAK_VELOCITY  = 0.03; // min peak per-frame wrist x-displacement — filters slow drift
 const SWIPE_MIN_DURATION      = 0.05; // seconds (min swipe duration — allows fast snapping swipes)
 const SWIPE_MAX_DURATION         = 2.0;  // seconds (max swipe duration)
-const SWIPE_MIN_HAND_UPRIGHTNESS = 0.04; // wrist must be ≥ this far below middle-finger MCP (screen y) — blocks flat/resting hands
-const SWIPE_UPRIGHT_FRAMES       = 1;   // consecutive upright frames required before tracking begins
+const SWIPE_MIN_HAND_UPRIGHTNESS = 0.08; // wrist must be ≥ this far below middle-finger MCP (screen y) — blocks flat/resting hands
+const SWIPE_UPRIGHT_FRAMES       = 3;   // consecutive upright frames required before tracking begins
 const PALM_THUMB_MIN_SPREAD    = 0.04;  // min |thumbTip.x − indexTip.x| — thumb hidden behind hand when edge-on
 const PALM_HOLD_MS            = 150;  // stable palm hold for OPEN_MENU
 const FIST_HOLD_MS            = 50;   // min fist hold before palm transition (OPEN_MENU)
@@ -24,7 +24,7 @@ const CLOSE_MAX_MS            = 1000; // total timeout for CLOSE_MENU sequence
 const CLOSE_FIST_HOLD_MS      = 75;   // fist must be held this long to fire CLOSE_MENU
 const REQUIRED_FRAMES         = 1;    // consecutive frames before accepting hand
 const MIN_HAND_SPAN           = 0.015; // ignore hands < 1.5% of frame width
-const COOLDOWN_MS             = 400;  // global cooldown after any proposal
+const COOLDOWN_MS             = 1000; // global cooldown after any proposal
 const DEBUG_GESTURES          = false; // set true to enable verbose gesture diagnostic logs
 
 // ─── Finger & palm helpers ────────────────────────────────────────────────────
