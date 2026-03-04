@@ -814,11 +814,27 @@ export function proposeGestureFromLandmarks(results) {
     const hs = perHand[side];
     const sw = hs.swipe;
 
-    if (sw.state === "TRACKING" && sw.lastTotalDisp >= 0.05 && sw.lastAbsDx >= 0.04) {
+    if (sw.state === "TRACKING" &&
+        sw.lastTotalDisp >= SWIPE_MIN_DISPLACEMENT &&
+        sw.lastAbsDx    >= SWIPE_MIN_X_DISPLACEMENT &&
+        sw.lastElapsed  >= SWIPE_MIN_DURATION) {
+
       const xRatio = sw.lastTotalDisp > 0 ? sw.lastAbsDx / sw.lastTotalDisp : 0;
+
+      // Recompute peak velocity from trajectory — same calculation as main path
+      let lastPeakVel = 0;
+      for (let i = 1; i < sw.trajX.length; i++) {
+        lastPeakVel = Math.max(lastPeakVel, Math.abs(sw.trajX[i] - sw.trajX[i - 1]));
+      }
+
       if (xRatio < 0.4) {
         console.log(
           `[SWIPE-REJECTED] lastframe vertical motion: x=${sw.lastAbsDx.toFixed(3)} y=${Math.abs(sw.lastDy).toFixed(3)} ratio=${xRatio.toFixed(3)}`,
+        );
+        // fall through to resetHandState below
+      } else if (lastPeakVel < SWIPE_MIN_PEAK_VELOCITY) {
+        console.log(
+          `[SWIPE-REJECTED] lastframe low peak velocity: vel=${lastPeakVel.toFixed(3)} x=${sw.lastAbsDx.toFixed(3)}`,
         );
         // fall through to resetHandState below
       } else {
@@ -835,7 +851,8 @@ export function proposeGestureFromLandmarks(results) {
         };
         dbg(
           `[SWIPE-LASTFRAME] ${side} intent=${intent}` +
-          ` disp=${sw.lastTotalDisp.toFixed(2)} x=${sw.lastAbsDx.toFixed(2)} y=${Math.abs(sw.lastDy).toFixed(2)} dur=${sw.lastElapsed.toFixed(2)}s`,
+          ` disp=${sw.lastTotalDisp.toFixed(2)} x=${sw.lastAbsDx.toFixed(2)} y=${Math.abs(sw.lastDy).toFixed(2)}` +
+          ` dur=${sw.lastElapsed.toFixed(2)}s vel=${lastPeakVel.toFixed(3)}`,
         );
         const syntheticProposal = { intent, confidence: conf, landmarkSummary };
         const features = sw.lastLms
