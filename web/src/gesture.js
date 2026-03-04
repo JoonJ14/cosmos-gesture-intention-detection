@@ -320,6 +320,13 @@ function updateSwipe(side, hs, lms, mpConf, now) {
     }
 
     if (totalDisp >= SWIPE_MIN_DISPLACEMENT && absDx >= SWIPE_MIN_X_DISPLACEMENT && elapsed >= SWIPE_MIN_DURATION && hasLateralComponent && peakVel >= SWIPE_MIN_PEAK_VELOCITY) {
+      const xRatio = totalDisp > 0 ? absDx / totalDisp : 0;
+      if (xRatio < 0.6) {
+        console.log(`[SWIPE-REJECTED] vertical motion: x=${absDx.toFixed(3)} y=${Math.abs(dy).toFixed(3)} ratio=${xRatio.toFixed(3)}`);
+        sw.state         = "IDLE";
+        sw.uprightFrames = 0;
+        return null;
+      }
       // Direction from x-component sign (raw x decreasing = screen-right = SWITCH_LEFT)
       const isRight = dx < 0;
       const conf = swipeConfidence(mpConf, totalDisp, elapsed, span);
