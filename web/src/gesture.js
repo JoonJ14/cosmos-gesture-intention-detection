@@ -9,7 +9,7 @@ const LM_PINKY_MCP  = 17; const LM_PINKY_TIP  = 20;
 // ─── Detection thresholds (spec: docs/GESTURE_DETECTION.md) ──────────────────
 // Intentionally loose for high recall — false positives are filtered by Cosmos.
 const SWIPE_MIN_DISPLACEMENT  = 0.12; // min total (Euclidean) displacement to qualify as a swipe
-const SWIPE_MIN_X_DISPLACEMENT = 0.05; // min absolute x-displacement — prevents hand-raise triggering
+const SWIPE_MIN_X_DISPLACEMENT = 0.08; // min absolute x-displacement — prevents hand-raise triggering
 const SWIPE_MIN_PEAK_VELOCITY  = 0.03; // min peak per-frame wrist x-displacement — filters slow drift
 const SWIPE_MIN_DURATION      = 0.05; // seconds (min swipe duration — allows fast snapping swipes)
 const SWIPE_MAX_DURATION         = 2.0;  // seconds (max swipe duration)
@@ -321,7 +321,7 @@ function updateSwipe(side, hs, lms, mpConf, now) {
 
     if (totalDisp >= SWIPE_MIN_DISPLACEMENT && absDx >= SWIPE_MIN_X_DISPLACEMENT && elapsed >= SWIPE_MIN_DURATION && hasLateralComponent && peakVel >= SWIPE_MIN_PEAK_VELOCITY) {
       const xRatio = totalDisp > 0 ? absDx / totalDisp : 0;
-      if (xRatio < 0.6) {
+      if (xRatio < 0.4) {
         console.log(`[SWIPE-REJECTED] vertical motion: x=${absDx.toFixed(3)} y=${Math.abs(dy).toFixed(3)} ratio=${xRatio.toFixed(3)}`);
         sw.state         = "IDLE";
         sw.uprightFrames = 0;
@@ -332,6 +332,10 @@ function updateSwipe(side, hs, lms, mpConf, now) {
       const conf = swipeConfidence(mpConf, totalDisp, elapsed, span);
       const _vel = _wristVelocity(hs);
       const _wasStationary = sw.startVelocity !== null && sw.startVelocity < 0.003;
+      console.log(
+        `[SWIPE-FIRE] main path: x=${absDx.toFixed(3)} y=${Math.abs(dy).toFixed(3)} ratio=${xRatio.toFixed(3)}` +
+        ` disp=${totalDisp.toFixed(3)} vel=${peakVel.toFixed(3)}`,
+      );
       dbg(
         `[SWIPE-HIT] disp=${totalDisp.toFixed(2)} x=${absDx.toFixed(2)} y=${Math.abs(dy).toFixed(2)} dur=${elapsed.toFixed(2)}s` +
         ` vel=${_vel.toFixed(3)} peakVel=${peakVel.toFixed(3)} stationary_before=${_wasStationary}`,
@@ -812,7 +816,7 @@ export function proposeGestureFromLandmarks(results) {
 
     if (sw.state === "TRACKING" && sw.lastTotalDisp >= 0.05 && sw.lastAbsDx >= 0.04) {
       const xRatio = sw.lastTotalDisp > 0 ? sw.lastAbsDx / sw.lastTotalDisp : 0;
-      if (xRatio < 0.6) {
+      if (xRatio < 0.4) {
         console.log(
           `[SWIPE-REJECTED] lastframe vertical motion: x=${sw.lastAbsDx.toFixed(3)} y=${Math.abs(sw.lastDy).toFixed(3)} ratio=${xRatio.toFixed(3)}`,
         );
