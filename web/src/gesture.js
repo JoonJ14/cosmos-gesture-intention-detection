@@ -811,29 +811,37 @@ export function proposeGestureFromLandmarks(results) {
     const sw = hs.swipe;
 
     if (sw.state === "TRACKING" && sw.lastTotalDisp >= 0.05 && sw.lastAbsDx >= 0.04) {
-      const isRight = sw.lastDx < 0;
-      const intent  = isRight ? "SWITCH_LEFT" : "SWITCH_RIGHT";
-      const conf    = swipeConfidence(sw.lastMpConf, sw.lastTotalDisp, sw.lastElapsed, sw.lastSpan);
-      const landmarkSummary = {
-        handedness:         side,
-        wrist_trajectory_x: [...sw.trajX],
-        displacement_pct:   r2(sw.lastTotalDisp),
-        duration_s:         r2(sw.lastElapsed),
-        fingers_extended:   sw.lastLms ? countExtendedFingers(sw.lastLms) : 0,
-        palm_facing_camera: sw.lastLms ? isPalmFacing(sw.lastLms) : false,
-      };
-      dbg(
-        `[SWIPE-LASTFRAME] ${side} intent=${intent}` +
-        ` disp=${sw.lastTotalDisp.toFixed(2)} x=${sw.lastAbsDx.toFixed(2)} y=${Math.abs(sw.lastDy).toFixed(2)} dur=${sw.lastElapsed.toFixed(2)}s`,
-      );
-      const syntheticProposal = { intent, confidence: conf, landmarkSummary };
-      const features = sw.lastLms
-        ? extractFeatures(sw.lastLms, side, intent, syntheticProposal, hs)
-        : null;
-      lastProposalTs = now;
-      resetHandState(perHand.Left);
-      resetHandState(perHand.Right);
-      return { intent, confidence: conf, landmarks: sw.lastLms, handedness: side, landmarkSummary, features };
+      const xRatio = sw.lastTotalDisp > 0 ? sw.lastAbsDx / sw.lastTotalDisp : 0;
+      if (xRatio < 0.6) {
+        console.log(
+          `[SWIPE-REJECTED] lastframe vertical motion: x=${sw.lastAbsDx.toFixed(3)} y=${Math.abs(sw.lastDy).toFixed(3)} ratio=${xRatio.toFixed(3)}`,
+        );
+        // fall through to resetHandState below
+      } else {
+        const isRight = sw.lastDx < 0;
+        const intent  = isRight ? "SWITCH_LEFT" : "SWITCH_RIGHT";
+        const conf    = swipeConfidence(sw.lastMpConf, sw.lastTotalDisp, sw.lastElapsed, sw.lastSpan);
+        const landmarkSummary = {
+          handedness:         side,
+          wrist_trajectory_x: [...sw.trajX],
+          displacement_pct:   r2(sw.lastTotalDisp),
+          duration_s:         r2(sw.lastElapsed),
+          fingers_extended:   sw.lastLms ? countExtendedFingers(sw.lastLms) : 0,
+          palm_facing_camera: sw.lastLms ? isPalmFacing(sw.lastLms) : false,
+        };
+        dbg(
+          `[SWIPE-LASTFRAME] ${side} intent=${intent}` +
+          ` disp=${sw.lastTotalDisp.toFixed(2)} x=${sw.lastAbsDx.toFixed(2)} y=${Math.abs(sw.lastDy).toFixed(2)} dur=${sw.lastElapsed.toFixed(2)}s`,
+        );
+        const syntheticProposal = { intent, confidence: conf, landmarkSummary };
+        const features = sw.lastLms
+          ? extractFeatures(sw.lastLms, side, intent, syntheticProposal, hs)
+          : null;
+        lastProposalTs = now;
+        resetHandState(perHand.Left);
+        resetHandState(perHand.Right);
+        return { intent, confidence: conf, landmarks: sw.lastLms, handedness: side, landmarkSummary, features };
+      }
     }
 
     resetHandState(hs);
