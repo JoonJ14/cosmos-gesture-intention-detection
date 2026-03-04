@@ -10,7 +10,7 @@ const LM_PINKY_MCP  = 17; const LM_PINKY_TIP  = 20;
 // Intentionally loose for high recall — false positives are filtered by Cosmos.
 const SWIPE_MIN_DISPLACEMENT  = 0.12; // min total (Euclidean) displacement to qualify as a swipe
 const SWIPE_MIN_X_DISPLACEMENT = 0.08; // min absolute x-displacement — prevents hand-raise triggering
-const SWIPE_MIN_PEAK_VELOCITY  = 0.03; // min peak per-frame wrist x-displacement — filters slow drift
+const SWIPE_MIN_PEAK_VELOCITY  = 0.10; // min peak per-frame wrist x-displacement — filters slow drift
 const SWIPE_MIN_DURATION      = 0.05; // seconds (min swipe duration — allows fast snapping swipes)
 const SWIPE_MAX_DURATION         = 2.0;  // seconds (max swipe duration)
 const SWIPE_MIN_HAND_UPRIGHTNESS = 0.08; // wrist must be ≥ this far below middle-finger MCP (screen y) — blocks flat/resting hands
