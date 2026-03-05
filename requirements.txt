@@ -1,0 +1,17 @@
+# Core services
+fastapi
+uvicorn
+flask
+flask-cors
+pydantic
+numpy
+joblib
+jsonschema
+pyyaml
+
+# Student model (training + inference)
+scikit-learn
+xgboost
+lightgbm
+
+# macOS only: brew install libomp (required by xgboost)
