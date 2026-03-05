@@ -4,7 +4,7 @@
 
 > NVIDIA Cosmos Cookoff 2026 Submission
 
-> 📹 [Demo Video — Coming Soon]
+> 📹 [Demo Video](https://youtu.be/qUx0bgGW2z8)
 
 ## The Problem
 
@@ -127,13 +127,18 @@ Adding gesture N+1 means adding one sentence to the prompt. Cosmos reasons about
 
 The student model solves the latency problem: Cosmos labels events during normal use (5.8–8.4s), and the student learns to replicate those decisions locally in <10ms.
 
-We demonstrate Cosmos's value with **8 hard negative scenarios** — motions that a landmark-based detector proposes as gestures, but Cosmos correctly rejects:
+We demonstrate Cosmos's value with **hard negative scenarios across 3 categories** — motions that a landmark-based detector proposes as gestures, but Cosmos correctly rejects:
 
 | Category | Scenario | Why heuristics fail |
 |----------|----------|---------------------|
-| Self-grooming | Scratch head, scratch nose, rub eye | Same hand trajectory as a swipe |
-| Reaching | Wipe monitor, reach to side, catch a fly | Same displacement and velocity |
-| Conversation | Wave while talking, receive item from someone | Same hand shape and motion |
+| Self-grooming | Scratch head | Same hand trajectory as a swipe |
+| Self-grooming | Scratch nose | Same hand trajectory as a swipe |
+| Self-grooming | Rub eye | Same hand trajectory as a swipe |
+| Reaching | Wipe monitor | Same displacement and velocity |
+| Reaching | Reach to side | Same displacement and velocity |
+| Reaching | Catch a fly | Same displacement and velocity |
+| Conversation | Wave while talking | Same hand shape and motion |
+| Conversation | Receive item from someone | Same hand shape and motion |
 
 **Results:** Without Cosmos, the state machine fires on all candidate motions including incidental ones (0% rejection). With Cosmos verification, 90.1% of hard negatives are correctly rejected (73/81 across 6 negative categories). The hardest category (reaching motions) achieves 25% rejection — these are kinematically identical to real swipes and represent the genuine frontier of VLM-based discrimination.
 
@@ -197,15 +202,7 @@ For detailed per-iteration metrics and category breakdowns, see [`docs/COSMOS_PE
 
 The gesture state machine is intentionally **high-recall / low-precision**: it fires on many candidate gestures, including false positives. Cosmos acts as the **teacher**, labeling every proposal with ground-truth intent via visual reasoning. A lightweight local **student classifier** trains on those labels and takes over filtering in real time.
 
-**Phase 1 is fully operational.** The student model is trained and running:
-
-| | |
-|---|---|
-| Model | XGBoost (winner of 6-model competition) |
-| Cosmos Agreement | 94.3% |
-| Training samples | 946 live events labeled by Cosmos during real usage sessions |
-| Features | 12 numeric MediaPipe features (swipe displacement, finger counts, wrist velocity, palm orientation, etc.) + 4 one-hot gesture type encodings |
-| Student inference | <10ms vs. Cosmos 5.8–8.4s (500–800x speedup) |
+**Phase 1 is fully operational.** The student model is trained and running. See [Results](#results) for full student model metrics and the 6-model competition results.
 
 The pipeline is fully automated: `build_calibration.py` aggregates Cosmos-labeled events from `verifier/logs/verifier_events.jsonl` → `train_student.py` trains and saves the model → the student service hot-reloads on the next request. Safe mode (observe only) shows both Student and Cosmos decisions side by side in real time for comparison.
 
@@ -214,7 +211,7 @@ The pipeline is fully automated: `build_calibration.py` aggregates Cosmos-labele
 2. **Phase 2** — When student-Cosmos agreement exceeds 90%, reduce Cosmos sampling to ~50%
 3. **Phase 3** — When agreement exceeds 95%, spot-check only (10–20%); student handles the rest
 
-As the user keeps using our models, it will go through Phase 1 and then as it keeps improving and learning from Cosmos reasoning model, it will go to Phase 2 and eventually Phase 3. A small random percentage will always go to Cosmos (never 0%) to detect student blind spots.
+Through continued usage, the system progresses from Phase 1 to Phase 2 as the student's agreement with Cosmos improves, and eventually to Phase 3 where the student handles the majority of decisions independently. A small random percentage will always go to Cosmos (never 0%) to detect student blind spots.
 
 See [Teacher-Student Loop Design & Risks](docs/OPTION2_RISKS_AND_MITIGATIONS.md) for the full design, failure modes, and safeguards.
 
@@ -235,7 +232,7 @@ Evaluated against 151 labeled clips (70 true positives + 81 hard negatives acros
 
 The student model is a fast local cache of Cosmos's intelligence — not a standalone classifier. It doesn't need to be perfect; it needs to be fast and mostly right, with Cosmos continuously verifying and correcting in the background.
 
-Each retraining round, 6 model architectures compete head-to-head on the latest Cosmos-labeled data: Logistic Regression, Random Forest, SVM (RBF), MLP Neural Network, XGBoost, and LightGBM. The best performer automatically becomes the production model. As the data evolves, so does the winning architecture — v5's winner was SVM, v6's winner is XGBoost.
+Each retraining round, 6 model architectures compete head-to-head on the latest Cosmos-labeled data: Logistic Regression, Random Forest, SVM (RBF), MLP Neural Network, XGBoost, and LightGBM. The best performer automatically becomes the production model. As the data evolves, so does the winning architecture — v5's winner was SVM, v7's winner is XGBoost.
 
 | Metric | Result |
 |--------|--------|
