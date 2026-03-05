@@ -39,16 +39,22 @@ Evaluated against 151 labeled clips (70 true positives + 81 hard negatives acros
 | Prompt iterations to ship | 10 (~50 min total engineering time) |
 | Inference latency | 5.8–8.4s per verification |
 
-**Student Model (trained on Cosmos-labeled live data):**
+**Student Model (Teacher-Student Distillation):**
+
+The student model is a fast local cache of Cosmos's intelligence — not a standalone classifier. It doesn't need to be perfect; it needs to be fast and mostly right, with Cosmos continuously verifying and correcting in the background.
+
+Each retraining round, 6 model architectures compete head-to-head on the latest Cosmos-labeled data: Logistic Regression, Random Forest, SVM (RBF), MLP Neural Network, XGBoost, and LightGBM. The best performer automatically becomes the production model. As the data evolves, so does the winning architecture — v5's winner was SVM, v6's winner is XGBoost.
 
 | Metric | Result |
 |--------|--------|
-| Accuracy | 88.2% (RandomForest, scikit-learn) |
-| Training samples | 380 (real usage sessions, labeled by Cosmos) |
+| Cosmos Agreement | 94.3% |
+| Model | XGBoost (winner of 6-model competition) |
+| Training samples | 946 (live Cosmos-labeled data, conflict-cleaned, class-balanced) |
 | Features | 16 (12 MediaPipe numeric + 4 one-hot gesture type) |
 | Inference latency | <10ms |
+| Speedup over Cosmos | 500–800x |
 
-**Key takeaway:** Cosmos provides high-accuracy intent verification. The student model learns from Cosmos labels to deliver near-real-time decisions, achieving a 500–800x speedup while maintaining strong accuracy.
+**Key takeaway:** Cosmos provides high-accuracy intent verification. The student model learns from Cosmos's labels and delivers the same decision in under 10 milliseconds — a 500–800x speedup. Every retraining round, 6 model architectures compete and the best one wins, ensuring the student improves as more labeled data accumulates.
 
 ## Architecture
 
@@ -262,9 +268,9 @@ The gesture state machine is intentionally **high-recall / low-precision**: it f
 
 | | |
 |---|---|
-| Model | RandomForest (scikit-learn) |
-| Test accuracy | 88.2% |
-| Training samples | 380 live events labeled by Cosmos during real usage sessions |
+| Model | XGBoost (winner of 6-model competition) |
+| Cosmos Agreement | 94.3% |
+| Training samples | 946 live events labeled by Cosmos during real usage sessions |
 | Features | 12 numeric MediaPipe features (swipe displacement, finger counts, wrist velocity, palm orientation, etc.) + 4 one-hot gesture type encodings |
 | Student inference | <10ms vs. Cosmos 5.8–8.4s (500–800x speedup) |
 

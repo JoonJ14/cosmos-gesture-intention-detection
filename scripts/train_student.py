@@ -27,6 +27,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
@@ -106,6 +107,7 @@ def load_jsonl_events(path: Path) -> list[dict]:
                 "features":     features,
                 "gesture_type": gesture_type,
                 "label":        int(label),
+                "clip_id":      record.get("clip_id"),
             })
 
     return events
@@ -116,6 +118,19 @@ def build_matrix(events: list[dict]):
                  dtype=np.float32)
     y = np.array([e["label"] for e in events], dtype=np.int32)
     return X, y
+
+
+def filter_conflicting_clips(events: list[dict]) -> tuple[list[dict], int]:
+    """Drop all events whose clip_id appears with both label=0 and label=1."""
+    from collections import defaultdict
+    clip_labels: dict = defaultdict(set)
+    for e in events:
+        cid = e.get("clip_id")
+        if cid is not None:
+            clip_labels[cid].add(e["label"])
+    conflict_ids = {cid for cid, lbls in clip_labels.items() if len(lbls) > 1}
+    filtered = [e for e in events if e.get("clip_id") not in conflict_ids]
+    return filtered, len(events) - len(filtered)
 
 
 def load_calibration(path: Path = CALIB_PATH):
@@ -129,8 +144,8 @@ def load_calibration(path: Path = CALIB_PATH):
 
 # ─── Training ─────────────────────────────────────────────────────────────────
 
-def train_and_pick(X_train, y_train, X_test, y_test):
-    """Train LR, RF, XGBoost, LightGBM, and SVM; return the best model."""
+def train_and_pick(X_train, y_train, X_test, y_test, scale_pos_weight: float = 1.0):
+    """Train LR, RF, SVM, XGBoost, LightGBM, MLP; return the best model."""
     candidates = [
         ("LogisticRegression", LogisticRegression(max_iter=500, class_weight="balanced")),
         ("RandomForest",       RandomForestClassifier(max_depth=3, n_estimators=10,
@@ -139,12 +154,18 @@ def train_and_pick(X_train, y_train, X_test, y_test):
                                    ("scaler", StandardScaler()),
                                    ("svm",    SVC(kernel="rbf", probability=True, class_weight="balanced")),
                                ])),
+        ("MLP",                Pipeline([
+                                   ("scaler", StandardScaler()),
+                                   ("mlp",    MLPClassifier(hidden_layer_sizes=(64, 32),
+                                                            max_iter=500, early_stopping=True,
+                                                            random_state=42)),
+                               ])),
     ]
 
     if _XGBOOST_AVAILABLE:
         candidates.append(("XGBoost", XGBClassifier(
             n_estimators=100, max_depth=6, learning_rate=0.1,
-            eval_metric="logloss", random_state=42,
+            eval_metric="logloss", scale_pos_weight=scale_pos_weight, random_state=42,
         )))
     else:
         print("  [skip] XGBoost not installed")
@@ -152,7 +173,7 @@ def train_and_pick(X_train, y_train, X_test, y_test):
     if _LIGHTGBM_AVAILABLE:
         candidates.append(("LightGBM", LGBMClassifier(
             n_estimators=100, max_depth=6, learning_rate=0.1,
-            verbose=-1, random_state=42,
+            class_weight="balanced", verbose=-1, random_state=42,
         )))
     else:
         print("  [skip] LightGBM not installed")
@@ -189,6 +210,10 @@ def main():
     print(f"Source: {args.data}")
     events = load_jsonl_events(args.data)
     print(f"Loaded {len(events)} samples")
+
+    events, n_removed = filter_conflicting_clips(events)
+    if n_removed:
+        print(f"  Removed {n_removed} rows with conflicting clip_id labels → {len(events)} remaining")
 
     if len(events) < MIN_SAMPLES:
         needed = MIN_SAMPLES - len(events)
@@ -273,7 +298,12 @@ def main():
     )
     print(f"Train: {len(y_train)}  |  Test: {len(y_test)}")
 
-    new_model, model_type, test_acc = train_and_pick(X_train, y_train, X_test, y_test)
+    pos_train = int(y_train.sum())
+    neg_train = len(y_train) - pos_train
+    scale_pos_weight = neg_train / pos_train if pos_train > 0 else 1.0
+
+    new_model, model_type, test_acc = train_and_pick(X_train, y_train, X_test, y_test,
+                                                     scale_pos_weight=scale_pos_weight)
 
     print("\n─── Classification report (test set) ───")
     preds = new_model.predict(X_test)

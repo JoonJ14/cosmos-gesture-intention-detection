@@ -143,5 +143,63 @@
       "gesture_SWITCH_RIGHT",
       "gesture_SWITCH_LEFT"
     ]
+  },
+  {
+    "version": "v6",
+    "timestamp": "2026-03-05T04:29:42Z",
+    "num_samples": 1046,
+    "pos_samples": 614,
+    "neg_samples": 432,
+    "model_type": "RandomForest",
+    "test_accuracy": 0.8333,
+    "calib_accuracy": 0.8451,
+    "calib_acc_old": 0.8298,
+    "feature_names": [
+      "swipeDisplacement",
+      "swipeDuration",
+      "peakVelocity",
+      "fingersExtended",
+      "handSide",
+      "handSpan",
+      "wristX",
+      "wristY",
+      "palmFacing",
+      "wristVelocityX",
+      "wristVelocityY",
+      "stateConfidence",
+      "gesture_OPEN_MENU",
+      "gesture_CLOSE_MENU",
+      "gesture_SWITCH_RIGHT",
+      "gesture_SWITCH_LEFT"
+    ]
+  },
+  {
+    "version": "v7",
+    "timestamp": "2026-03-05T04:37:27Z",
+    "num_samples": 946,
+    "pos_samples": 564,
+    "neg_samples": 382,
+    "model_type": "XGBoost",
+    "test_accuracy": 0.8526,
+    "calib_accuracy": 0.9426,
+    "calib_acc_old": 0.8451,
+    "feature_names": [
+      "swipeDisplacement",
+      "swipeDuration",
+      "peakVelocity",
+      "fingersExtended",
+      "handSide",
+      "handSpan",
+      "wristX",
+      "wristY",
+      "palmFacing",
+      "wristVelocityX",
+      "wristVelocityY",
+      "stateConfidence",
+      "gesture_OPEN_MENU",
+      "gesture_CLOSE_MENU",
+      "gesture_SWITCH_RIGHT",
+      "gesture_SWITCH_LEFT"
+    ]
   }
 ]
