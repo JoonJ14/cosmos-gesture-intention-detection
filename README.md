@@ -49,7 +49,7 @@ Cosmos earns its role by solving what heuristics fundamentally cannot: distingui
     │                 │                         │                                   │
     │                 v                         │                                   │
     │  ┌─────────────────────────────────────┐  │                                   │
-    │  │  Cosmos Reason 2 — DGX Spark (GB10) │  │───────────────────────────────────┘
+    │  │  Cosmos Reason 2                    │  │───────────────────────────────────┘
     │  │  Teacher: labels every proposal     │  │
     │  │  Labels feed back → trains Student  │  │
     │  └─────────────────────────────────────┘  │
@@ -278,13 +278,9 @@ http://localhost:5173/?verifier=http://<DGX_IP>:8788&student=http://localhost:87
 
 Allow webcam access. Toggle **Safe Mode** (observe only) to see both Student and Cosmos decisions side by side without executing gestures. Uncheck for normal operation where verified gestures execute immediately.
 
-**Note:** The verifier requires a running Cosmos Reason 2 instance via vLLM on the DGX Spark. Without it, the verifier falls back to a stub that approves all gestures. Set `NIM_ENABLED=1` environment variable to enable real Cosmos verification.
+**Note:** The verifier requires a running Cosmos Reason 2 instance via vLLM to get live feedback. You can also just use it periodically to get feedback after a number of instances to teach the student model locally. Set `NIM_ENABLED=1` environment variable to enable real Cosmos verification if you want to run a Cosmos Reason 2 instance on a device that can run it live like DGX Spark.
 
 ### Platform requirements
-
-**Linux (DGX Spark / Ubuntu):**
-- GNOME X11 desktop
-- `sudo apt install xdotool`
 
 **macOS:**
 - Enable Accessibility permission for Terminal: System Settings → Privacy & Security → Accessibility
