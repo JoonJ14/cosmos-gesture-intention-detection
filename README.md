@@ -26,36 +26,6 @@ The architecture follows the **Event Reviewer pattern:**
 
 Cosmos earns its role by solving what heuristics fundamentally cannot: distinguishing a deliberate lateral swipe from someone scratching their head, catching a fly, or waving during conversation.
 
-## Results
-
-Evaluated against 151 labeled clips (70 true positives + 81 hard negatives across 6 negative categories), trained and running on real usage sessions.
-
-**Cosmos Intent Verification:**
-
-| Metric | Result |
-|--------|--------|
-| TP Recall | 98.6% (69/70) |
-| Hard Negative Rejection | 90.1% (73/81) |
-| Prompt iterations to ship | 10 (~50 min total engineering time) |
-| Inference latency | 5.8–8.4s per verification |
-
-**Student Model (Teacher-Student Distillation):**
-
-The student model is a fast local cache of Cosmos's intelligence — not a standalone classifier. It doesn't need to be perfect; it needs to be fast and mostly right, with Cosmos continuously verifying and correcting in the background.
-
-Each retraining round, 6 model architectures compete head-to-head on the latest Cosmos-labeled data: Logistic Regression, Random Forest, SVM (RBF), MLP Neural Network, XGBoost, and LightGBM. The best performer automatically becomes the production model. As the data evolves, so does the winning architecture — v5's winner was SVM, v6's winner is XGBoost.
-
-| Metric | Result |
-|--------|--------|
-| Cosmos Agreement | 94.3% |
-| Model | XGBoost (winner of 6-model competition) |
-| Training samples | 946 (live Cosmos-labeled data, conflict-cleaned, class-balanced) |
-| Features | 16 (12 MediaPipe numeric + 4 one-hot gesture type) |
-| Inference latency | <10ms |
-| Speedup over Cosmos | 500–800x |
-
-**Key takeaway:** Cosmos provides high-accuracy intent verification. The student model learns from Cosmos's labels and delivers the same decision in under 10 milliseconds — a 500–800x speedup. Every retraining round, 6 model architectures compete and the best one wins, ensuring the student improves as more labeled data accumulates.
-
 ## Architecture
 
 ```
@@ -107,6 +77,36 @@ Each retraining round, 6 model architectures compete head-to-head on the latest 
 - The webcam is displayed in selfie/mirror mode — your right hand appears on the right side of the screen.
 - Swipes are **pose-agnostic**: open palm, edge of hand, loose fist all work equally. Either hand can trigger either direction.
 - OPEN_MENU requires a deliberate fist→palm transition to avoid accidental triggers from resting an open hand.
+
+## Results
+
+Evaluated against 151 labeled clips (70 true positives + 81 hard negatives across 6 negative categories), trained and running on real usage sessions.
+
+**Cosmos Intent Verification:**
+
+| Metric | Result |
+|--------|--------|
+| TP Recall | 98.6% (69/70) |
+| Hard Negative Rejection | 90.1% (73/81) |
+| Prompt iterations to ship | 10 (~50 min total engineering time) |
+| Inference latency | 5.8–8.4s per verification |
+
+**Student Model (Teacher-Student Distillation):**
+
+The student model is a fast local cache of Cosmos's intelligence — not a standalone classifier. It doesn't need to be perfect; it needs to be fast and mostly right, with Cosmos continuously verifying and correcting in the background.
+
+Each retraining round, 6 model architectures compete head-to-head on the latest Cosmos-labeled data: Logistic Regression, Random Forest, SVM (RBF), MLP Neural Network, XGBoost, and LightGBM. The best performer automatically becomes the production model. As the data evolves, so does the winning architecture — v5's winner was SVM, v6's winner is XGBoost.
+
+| Metric | Result |
+|--------|--------|
+| Cosmos Agreement | 94.3% |
+| Model | XGBoost (winner of 6-model competition) |
+| Training samples | 946 (live Cosmos-labeled data, conflict-cleaned, class-balanced) |
+| Features | 16 (12 MediaPipe numeric + 4 one-hot gesture type) |
+| Inference latency | <10ms |
+| Speedup over Cosmos | 500–800x |
+
+**Key takeaway:** Cosmos provides high-accuracy intent verification. The student model learns from Cosmos's labels and delivers the same decision in under 10 milliseconds — a 500–800x speedup. Every retraining round, 6 model architectures compete and the best one wins, ensuring the student improves as more labeled data accumulates.
 
 ## Why Cosmos Is Necessary (Not Optional)
 
