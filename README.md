@@ -106,6 +106,17 @@ Each retraining round, 6 model architectures compete head-to-head on the latest 
 | Inference latency | <10ms |
 | Speedup over Cosmos | 500–800x |
 
+**v7 model competition (946 samples, conflict-cleaned):**
+
+| Model | Test Acc (vs Cosmos labels) |
+|---|---|
+| Logistic Regression | 80.5% |
+| Random Forest | 80.5% |
+| MLP Neural Network | 81.6% |
+| LightGBM | 84.2% |
+| SVM (RBF) | 83.7% |
+| **XGBoost** | **85.3% ← winner** |
+
 **Key takeaway:** Cosmos provides high-accuracy intent verification. The student model learns from Cosmos's labels and delivers the same decision in under 10 milliseconds — a 500–800x speedup. Every retraining round, 6 model architectures compete and the best one wins, ensuring the student improves as more labeled data accumulates.
 
 ## Why Cosmos Is Necessary (Not Optional)
