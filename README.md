@@ -267,6 +267,20 @@ Four terminals from repo root:
 ./scripts/run_web.sh        # Port 5173 — open in browser
 ```
 
+### Cosmos Reason 2 Setup (optional — needed for live verification)
+
+Download the Cosmos-Reason2-8B model weights, then start the vLLM server:
+
+```bash
+docker run -d --name cosmos-vllm --gpus all --restart always -p 8000:8000 \
+  -v /path/to/Cosmos-Reason2-8B:/model:rw \
+  vllm/vllm-openai:v0.16.0-aarch64-cu130 \
+  /model --served-model-name nvidia/cosmos-reason2-8b \
+  --dtype bfloat16 --max-model-len 8192 --gpu-memory-utilization 0.85
+```
+
+Set `NIM_ENABLED=1` in the verifier environment to enable live Cosmos verification. Without it, the system still runs with the student model for local inference but won't have Cosmos verification.
+
 Open the web app with service connections:
 
 ```
