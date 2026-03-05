@@ -285,6 +285,7 @@ Allow webcam access. Toggle **Safe Mode** (observe only) to see both Student and
 **macOS:**
 - Enable Accessibility permission for Terminal: System Settings → Privacy & Security → Accessibility
 - Uses `osascript` for key injection
+- Make sure all dependencies are installed (`pip install -r requirements.txt`) including the lightweight ML libraries (scikit-learn, XGBoost, LightGBM) so the student model can be trained from Cosmos Reason 2 feedback and used for local inference
 
 ## Beyond Desktop Gestures
 
