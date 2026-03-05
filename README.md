@@ -106,9 +106,9 @@ Each retraining round, 6 model architectures compete head-to-head on the latest 
 | Inference latency | <10ms |
 | Speedup over Cosmos | 500–800x |
 
-**v7 model competition (946 samples, conflict-cleaned):**
+**v7 model competition (946 samples):**
 
-| Model | Test Acc (vs Cosmos labels) |
+| Model | Test Acc on 20% Held-Out Set (vs Cosmos labels) |
 |---|---|
 | Logistic Regression | 80.5% |
 | Random Forest | 80.5% |
