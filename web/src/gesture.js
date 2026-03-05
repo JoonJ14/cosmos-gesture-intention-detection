@@ -10,7 +10,7 @@ const LM_PINKY_MCP  = 17; const LM_PINKY_TIP  = 20;
 // Intentionally loose for high recall — false positives are filtered by Cosmos.
 const SWIPE_MIN_DISPLACEMENT  = 0.12; // min total (Euclidean) displacement to qualify as a swipe
 const SWIPE_MIN_X_DISPLACEMENT = 0.08; // min absolute x-displacement — prevents hand-raise triggering
-const SWIPE_MIN_PEAK_VELOCITY  = 0.10; // min peak per-frame wrist x-displacement — filters slow drift
+const SWIPE_MIN_PEAK_VELOCITY  = 0.05; // min peak per-frame wrist x-displacement — filters slow drift
 const SWIPE_MIN_DURATION      = 0.05; // seconds (min swipe duration — allows fast snapping swipes)
 const SWIPE_MAX_DURATION         = 2.0;  // seconds (max swipe duration)
 const SWIPE_MIN_HAND_UPRIGHTNESS = 0.06; // wrist must be ≥ this far below middle-finger MCP (screen y) — blocks flat/resting hands
@@ -26,7 +26,7 @@ const CLOSE_FIST_HOLD_MS      = 75;   // fist must be held this long to fire CLO
 const REQUIRED_FRAMES         = 1;    // consecutive frames before accepting hand
 const MIN_HAND_SPAN           = 0.015; // ignore hands < 1.5% of frame width
 const COOLDOWN_MS             = 1000; // global cooldown after any proposal
-const DEBUG_GESTURES          = true; // set true to enable verbose gesture diagnostic logs
+const DEBUG_GESTURES          = false; // set true to enable verbose gesture diagnostic logs
 
 // ─── Finger & palm helpers ────────────────────────────────────────────────────
 
