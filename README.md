@@ -78,47 +78,6 @@ Cosmos earns its role by solving what heuristics fundamentally cannot: distingui
 - Swipes are **pose-agnostic**: open palm, edge of hand, loose fist all work equally. Either hand can trigger either direction.
 - OPEN_MENU requires a deliberate fist→palm transition to avoid accidental triggers from resting an open hand.
 
-## Results
-
-Evaluated against 151 labeled clips (70 true positives + 81 hard negatives across 6 negative categories), trained and running on real usage sessions.
-
-**Cosmos Intent Verification:**
-
-| Metric | Result |
-|--------|--------|
-| TP Recall | 98.6% (69/70) |
-| Hard Negative Rejection | 90.1% (73/81) |
-| Prompt iterations to ship | 10 (~50 min total engineering time) |
-| Inference latency | 5.8–8.4s per verification |
-
-**Student Model (Teacher-Student Distillation):**
-
-The student model is a fast local cache of Cosmos's intelligence — not a standalone classifier. It doesn't need to be perfect; it needs to be fast and mostly right, with Cosmos continuously verifying and correcting in the background.
-
-Each retraining round, 6 model architectures compete head-to-head on the latest Cosmos-labeled data: Logistic Regression, Random Forest, SVM (RBF), MLP Neural Network, XGBoost, and LightGBM. The best performer automatically becomes the production model. As the data evolves, so does the winning architecture — v5's winner was SVM, v6's winner is XGBoost.
-
-| Metric | Result |
-|--------|--------|
-| Cosmos Agreement | 94.3% |
-| Model | XGBoost (winner of 6-model competition) |
-| Training samples | 946 (live Cosmos-labeled data, conflict-cleaned, class-balanced) |
-| Features | 16 (12 MediaPipe numeric + 4 one-hot gesture type) |
-| Inference latency | <10ms |
-| Speedup over Cosmos | 500–800x |
-
-**v7 model competition (946 samples):**
-
-| Model | Test Acc on 20% Held-Out Set (vs Cosmos labels) |
-|---|---|
-| Logistic Regression | 80.5% |
-| Random Forest | 80.5% |
-| MLP Neural Network | 81.6% |
-| LightGBM | 84.2% |
-| SVM (RBF) | 83.7% |
-| **XGBoost** | **85.3% ← winner** |
-
-**Key takeaway:** Cosmos provides high-accuracy intent verification. The student model learns from Cosmos's labels and delivers the same decision in under 10 milliseconds — a 500–800x speedup. Every retraining round, 6 model architectures compete and the best one wins, ensuring the student improves as more labeled data accumulates.
-
 ## Why Cosmos Is Necessary (Not Optional)
 
 ### The Scalability Problem
@@ -234,6 +193,72 @@ Lateral hand displacement during a reach is kinematically indistinguishable from
 
 For detailed per-iteration metrics and category breakdowns, see [`docs/COSMOS_PERFORMANCE_TRACKING.md`](docs/COSMOS_PERFORMANCE_TRACKING.md) and [`docs/PROMPT_ENGINEERING_LOG.md`](docs/PROMPT_ENGINEERING_LOG.md).
 
+## Results
+
+Evaluated against 151 labeled clips (70 true positives + 81 hard negatives across 6 negative categories), trained and running on real usage sessions.
+
+**Cosmos Intent Verification:**
+
+| Metric | Result |
+|--------|--------|
+| TP Recall | 98.6% (69/70) |
+| Hard Negative Rejection | 90.1% (73/81) |
+| Prompt iterations to ship | 10 (~50 min total engineering time) |
+| Inference latency | 5.8–8.4s per verification |
+
+**Student Model (Teacher-Student Distillation):**
+
+The student model is a fast local cache of Cosmos's intelligence — not a standalone classifier. It doesn't need to be perfect; it needs to be fast and mostly right, with Cosmos continuously verifying and correcting in the background.
+
+Each retraining round, 6 model architectures compete head-to-head on the latest Cosmos-labeled data: Logistic Regression, Random Forest, SVM (RBF), MLP Neural Network, XGBoost, and LightGBM. The best performer automatically becomes the production model. As the data evolves, so does the winning architecture — v5's winner was SVM, v6's winner is XGBoost.
+
+| Metric | Result |
+|--------|--------|
+| Cosmos Agreement | 94.3% |
+| Model | XGBoost (winner of 6-model competition) |
+| Training samples | 946 (live Cosmos-labeled data, conflict-cleaned, class-balanced) |
+| Features | 16 (12 MediaPipe numeric + 4 one-hot gesture type) |
+| Inference latency | <10ms |
+| Speedup over Cosmos | 500–800x |
+
+**v7 model competition (946 samples):**
+
+| Model | Test Acc on 20% Held-Out Set (vs Cosmos labels) |
+|---|---|
+| Logistic Regression | 80.5% |
+| Random Forest | 80.5% |
+| MLP Neural Network | 81.6% |
+| LightGBM | 84.2% |
+| SVM (RBF) | 83.7% |
+| **XGBoost** | **85.3% ← winner** |
+
+**Key takeaway:** Cosmos provides high-accuracy intent verification. The student model learns from Cosmos's labels and delivers the same decision in under 10 milliseconds — a 500–800x speedup. Every retraining round, 6 model architectures compete and the best one wins, ensuring the student improves as more labeled data accumulates.
+
+## Teacher-Student Feedback Loop
+
+The gesture state machine is intentionally **high-recall / low-precision**: it fires on many candidate gestures, including false positives. Cosmos acts as the **teacher**, labeling every proposal with ground-truth intent via visual reasoning. A lightweight local **student classifier** trains on those labels and takes over filtering in real time.
+
+**Phase 1 is fully operational.** The student model is trained and running:
+
+| | |
+|---|---|
+| Model | XGBoost (winner of 6-model competition) |
+| Cosmos Agreement | 94.3% |
+| Training samples | 946 live events labeled by Cosmos during real usage sessions |
+| Features | 12 numeric MediaPipe features (swipe displacement, finger counts, wrist velocity, palm orientation, etc.) + 4 one-hot gesture type encodings |
+| Student inference | <10ms vs. Cosmos 5.8–8.4s (500–800x speedup) |
+
+The pipeline is fully automated: `build_calibration.py` aggregates Cosmos-labeled events from `verifier/logs/verifier_events.jsonl` → `train_student.py` trains and saves the model → the student service hot-reloads on the next request. Safe mode (observe only) shows both Student and Cosmos decisions side by side in real time for comparison.
+
+**Three phases:**
+1. **Phase 1** — 100% of proposals go to Cosmos for labeling; student runs in parallel for comparison
+2. **Phase 2** — When student-Cosmos agreement exceeds 90%, reduce Cosmos sampling to ~50%
+3. **Phase 3** — When agreement exceeds 95%, spot-check only (10–20%); student handles the rest
+
+As the user keeps using our models, it will go through Phase 1 and then as it keeps improving and learning from Cosmos reasoning model, it will go to Phase 2 and eventually Phase 3. A small random percentage will always go to Cosmos (never 0%) to detect student blind spots.
+
+See [Teacher-Student Loop Design & Risks](docs/OPTION2_RISKS_AND_MITIGATIONS.md) for the full design, failure modes, and safeguards.
+
 ## Quick Start
 
 Four terminals from repo root:
@@ -264,37 +289,6 @@ Allow webcam access. Toggle **Safe Mode** (observe only) to see both Student and
 **macOS:**
 - Enable Accessibility permission for Terminal: System Settings → Privacy & Security → Accessibility
 - Uses `osascript` for key injection
-
-## Hardware
-
-- **DGX Spark** (Grace Blackwell GB10, 128GB unified, Ubuntu 24.04 arm64) — Cosmos inference
-- **MacBook Air** (Apple Silicon) — development and secondary demo platform
-- USB webcam on DGX Spark; built-in camera on Mac
-
-## Teacher-Student Feedback Loop
-
-The gesture state machine is intentionally **high-recall / low-precision**: it fires on many candidate gestures, including false positives. Cosmos acts as the **teacher**, labeling every proposal with ground-truth intent via visual reasoning. A lightweight local **student classifier** trains on those labels and takes over filtering in real time.
-
-**Phase 1 is fully operational.** The student model is trained and running:
-
-| | |
-|---|---|
-| Model | XGBoost (winner of 6-model competition) |
-| Cosmos Agreement | 94.3% |
-| Training samples | 946 live events labeled by Cosmos during real usage sessions |
-| Features | 12 numeric MediaPipe features (swipe displacement, finger counts, wrist velocity, palm orientation, etc.) + 4 one-hot gesture type encodings |
-| Student inference | <10ms vs. Cosmos 5.8–8.4s (500–800x speedup) |
-
-The pipeline is fully automated: `build_calibration.py` aggregates Cosmos-labeled events from `verifier/logs/verifier_events.jsonl` → `train_student.py` trains and saves the model → the student service hot-reloads on the next request. Safe mode (observe only) shows both Student and Cosmos decisions side by side in real time for comparison.
-
-**Three phases:**
-1. **Phase 1** — 100% of proposals go to Cosmos for labeling; student runs in parallel for comparison
-2. **Phase 2** — When student-Cosmos agreement exceeds 90%, reduce Cosmos sampling to ~50%
-3. **Phase 3** — When agreement exceeds 95%, spot-check only (10–20%); student handles the rest
-
-As the user keeps using our models, it will go through Phase 1 and then as it keeps improving and learning from Cosmos reasoning model, it will go to Phase 2 and eventually Phase 3. A small random percentage will always go to Cosmos (never 0%) to detect student blind spots.
-
-See [Teacher-Student Loop Design & Risks](docs/OPTION2_RISKS_AND_MITIGATIONS.md) for the full design, failure modes, and safeguards.
 
 ## Beyond Desktop Gestures
 
