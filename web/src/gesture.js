@@ -826,18 +826,12 @@ export function proposeGestureFromLandmarks(results) {
         sw.lastAbsDx    >= SWIPE_MIN_X_DISPLACEMENT &&
         sw.lastElapsed  >= SWIPE_MIN_DURATION) {
 
-      const xRatio = sw.lastTotalDisp > 0 ? sw.lastAbsDx / sw.lastTotalDisp : 0;
-
-      // Note: peak velocity is NOT checked here. LASTFRAME fires after MediaPipe
-      // loses the hand, so velocity has already decayed. x-displacement (0.08)
-      // cleanly separates chin drops (0.05-0.06) from real swipes (0.12-0.30).
-
-      if (xRatio < 0.4) {
-        console.log(
-          `[SWIPE-REJECTED] lastframe vertical motion: x=${sw.lastAbsDx.toFixed(3)} y=${Math.abs(sw.lastDy).toFixed(3)} ratio=${xRatio.toFixed(3)}`,
-        );
-        // fall through to resetHandState below
-      } else {
+      // Note: lateral ratio NOT checked here — the hand naturally arcs downward as
+      // it exits frame, accumulating y-displacement that drops the ratio below 0.40
+      // even on real swipes. x-displacement (0.08) is the sole false-positive gate:
+      // chin drops have x=0.05-0.06 and are blocked by SWIPE_MIN_X_DISPLACEMENT.
+      // Note: peak velocity also NOT checked (decayed by the time hand leaves frame).
+      {
         const isRight = sw.lastDx < 0;
         const intent  = isRight ? "SWITCH_LEFT" : "SWITCH_RIGHT";
         const conf    = swipeConfidence(sw.lastMpConf, sw.lastTotalDisp, sw.lastElapsed, sw.lastSpan);
