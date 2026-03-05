@@ -95,7 +95,7 @@ If the student perfectly mimics Cosmos, it inherits whatever Cosmos gets wrong. 
 
 **Output:** Binary (intentional / not intentional)
 
-**Model:** RandomForest (scikit-learn). Both LogisticRegression and RandomForest are trained each run; the higher test-accuracy model is saved. RF has consistently won. Runs in under 10ms per prediction in the student service (Python Flask, port 8789).
+**Model:** XGBoost (current winner of 6-model competition). Each retraining round, 6 architectures compete on the latest Cosmos-labeled data — Logistic Regression, Random Forest, SVM (RBF), MLP Neural Network, XGBoost, and LightGBM — and the best performer is saved automatically. Runs in under 10ms per prediction in the student service (Python Flask, port 8789).
 
 **Important:** We never fine-tune Cosmos. Cosmos is a general reasoning model that already understands human intent from video. Fine-tuning it on a handful of gestures would be overkill, slow, and fragile. Instead, we train a tiny local model on hand landmark features, using Cosmos's structured labels as ground truth.
 
@@ -252,7 +252,7 @@ All core components are operational as of 2026-03-02:
 1. ✅ Loosened state machine — high-recall gesture detection running
 2. ✅ Eval clip recording + Cosmos labeling — 151 clips evaluated (70 TP + 81 hard NEG)
 3. ✅ Feature extraction — `extractFeatures()` in gesture.js, 16 features per proposal
-4. ✅ Student classifier — RandomForest, 88.2% accuracy on 380 live samples; `models/student/current_model.joblib`
+4. ✅ Student classifier — XGBoost (v7, winner of 6-model competition), 94.3% Cosmos agreement, 946 live samples; `models/student/current_model.joblib`
 5. ✅ Safe mode (observe only) — shows Student and Cosmos predictions side by side, no execution
 6. ✅ Automated training pipeline — `build_calibration.py` → `train_student.py` → model auto-saved
 7. 🔲 Demo video — in progress

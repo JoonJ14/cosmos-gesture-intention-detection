@@ -33,43 +33,39 @@ Cosmos earns its role by solving what heuristics fundamentally cannot: distingui
 │               Web App (JS, :5173)             │
 │  MediaPipe Hands · Gesture state machine      │
 │  Ring buffer · Confidence scoring · Overlay   │
-└───────────────────────┬───────────────────────┘
-                        │ gesture proposals
-                        v
-    ┌───────────────────────────────────────────┐
-    │       Verifier Service (PY, :8788)        │
-    │                                           │
-    │  ┌─────────────────────────────────────┐  │
-    │  │  Student ML Model (local)           │  │◄──────────────────────────────────┐
-    │  │  Lightweight intent classifier      │  │                                   │
-    │  └──────────────┬──────────────────────┘  │  feedback loop:                   │
-    │     Phase 1: all proposals → Cosmos       │  trains lightweight               │
-    │     Phase 2: ~50% once agreement > 90%    │  student model over time          │
-    │     Phase 3: ~10% spot-check, > 95%       │  to improve performance           │
-    │                 │                         │                                   │
-    │                 v                         │                                   │
-    │  ┌─────────────────────────────────────┐  │                                   │
-    │  │  Cosmos Reason 2                    │  │───────────────────────────────────┘
-    │  │  Teacher: labels every proposal     │  │
-    │  │  Labels feed back → trains Student  │  │
-    │  └─────────────────────────────────────┘  │
-    └────────────────────┬──────────────────────┘
-                         │ intentional=True
-                         v
-              ┌──────────────────────┐
-              │  Executor (PY, :8787)│
-              │  xdotool / osascript │
-              └──────────────────────┘
+└──────────────┬──────────────────────┬─────────┘
+               │ real-time proposal   │ async evidence frames
+               ▼                      ▼
+┌─────────────────────────┐  ┌────────────────────────────────────────┐
+│  Student Classifier     │  │      Verifier Service (PY, :8788)      │
+│  (PY, :8789)            │◄─│                                        │
+│  XGBoost · <10ms        │  │  Phase 1: all proposals → Cosmos       │
+│  execute / suppress     │  │  Phase 2: ~50% once agreement > 90%    │
+└──────────┬──────────────┘  │  Phase 3: ~10% spot-check, > 95%      │
+  execute=True               │               │                        │
+           │                 │               ▼                        │
+           │                 │  ┌──────────────────────────────────┐  │
+           │                 │  │  Cosmos Reason 2                 │  │
+           │                 │  │  Teacher: labels every proposal  │  │
+           │                 │  │  Labels feed back → retrains     │  │
+           │                 │  │  Student Classifier              │  │
+           │                 │  └──────────────────────────────────┘  │
+           │                 └────────────────────────────────────────┘
+           ▼
+┌──────────────────────┐
+│  Executor (PY, :8787)│
+│  xdotool / osascript │
+└──────────────────────┘
 ```
 
-**Decision flow:** Gesture proposals from the web app pass through the Student ML Model, which routes a sampled percentage to Cosmos Reason 2 for labeling. Cosmos labels feed back to continuously retrain the Student, reducing Cosmos sampling over time (Phase 1→3). Verified intentional gestures are forwarded to the Executor for OS action. See [Architecture Diagrams](docs/ARCHITECTURE_DIAGRAMS.md) for full details.
+**Decision flow:** The web app sends each gesture proposal to two services in parallel: the Student Classifier (:8789) for a real-time execute/suppress decision, and the Verifier (:8788) for async Cosmos labeling. Cosmos labels feed back to continuously retrain the Student, reducing Cosmos sampling over time (Phase 1→3). When the Student says execute, the action is forwarded to the Executor. See [Architecture Diagrams](docs/ARCHITECTURE_DIAGRAMS.md) for full details.
 
 ## Gestures
 
 | Intent | Gesture | Action (Linux / macOS) |
 |--------|---------|------------------------|
-| `OPEN_MENU` | Make a fist, then open palm (≥4 fingers spread, held ~0.3 s) | Super key / Ctrl+Up (Mission Control) |
-| `CLOSE_MENU` | Hold open palm still ~0.3 s, then close to fist and hold ~0.15 s | Escape |
+| `OPEN_MENU` | Make a fist, then open palm (≥3 fingers spread, held ~0.15 s) | Super key / Ctrl+Up (Mission Control) |
+| `CLOSE_MENU` | Hold open palm ~0.15 s, then close to fist and hold ~0.075 s | Escape |
 | `SWITCH_RIGHT` | Either hand sweeps leftward across the mirrored screen | Ctrl+Right / Ctrl+Right |
 | `SWITCH_LEFT` | Either hand sweeps rightward across the mirrored screen | Ctrl+Left / Ctrl+Left |
 
@@ -289,7 +285,7 @@ http://localhost:5173/?verifier=http://<DGX_IP>:8788&student=http://localhost:87
 
 Allow webcam access. Toggle **Safe Mode** (observe only) to see both Student and Cosmos decisions side by side without executing gestures. Uncheck for normal operation where verified gestures execute immediately.
 
-**Note:** The verifier requires a running Cosmos Reason 2 instance via vLLM to get live feedback. You can also just use it periodically to get feedback after a number of instances to teach the student model locally. Set `NIM_ENABLED=1` environment variable to enable real Cosmos verification if you want to run a Cosmos Reason 2 instance on a device that can run it live like DGX Spark.
+**Note:** Without Cosmos running, the system still operates using the student model for local inference. You can run Cosmos periodically (rather than continuously) to accumulate labeled events and retrain the student — see the Cosmos Reason 2 Setup section above for how to start the vLLM server.
 
 ### Platform requirements
 

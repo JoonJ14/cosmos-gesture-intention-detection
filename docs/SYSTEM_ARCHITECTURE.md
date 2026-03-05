@@ -63,7 +63,7 @@ Runs locally on the same machine as the web app.
 - Hot-reloads `models/student/current_model.joblib` when the file changes
 - Supports shadow mode (predictions logged but always returns execute=true) and active mode
 
-**Model:** scikit-learn RandomForest trained on Cosmos-labeled gesture events. 12 numeric MediaPipe features + 4 one-hot gesture type = 16 features total. Inference <10ms.
+**Model:** XGBoost (current winner of 6-model competition) trained on Cosmos-labeled gesture events. 12 numeric MediaPipe features + 4 one-hot gesture type = 16 features total. Inference <10ms.
 
 **Training pipeline:** `build_calibration.py` aggregates Cosmos-labeled events from `verifier/logs/verifier_events.jsonl` → `train_student.py` trains and saves `models/student/current_model.joblib`.
 
@@ -225,7 +225,7 @@ DGX Spark:
   Verifier (:8788) → Cosmos NIM (localhost)
 ```
 
-**Verifier URL configuration:** Pass `?verifier=http://192.168.1.250:8788&student=http://localhost:8789` as URL query params when opening the web app. Both URLs are configurable at runtime with no code changes.
+**Verifier URL configuration:** Pass `?verifier=http://<DGX_IP>:8788&student=http://localhost:8789` as URL query params when opening the web app. Both URLs are configurable at runtime with no code changes.
 
 ### Stub mode (offline development)
 Same as DGX-only or Mac-only, but the verifier uses stub logic (always approve or force-reject) instead of calling Cosmos. Useful for developing gesture detection without DGX access.

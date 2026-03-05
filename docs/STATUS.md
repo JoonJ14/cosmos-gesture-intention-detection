@@ -14,12 +14,12 @@
 
 > **Note:** The detailed session log below covers 2026-03-01. The March 2 session completed all remaining tasks: DGX woken, Cosmos eval run on 151 clips (98.6% TP recall, 90.1% hard negative rejection), student model trained (v4/v5, 88.2% accuracy on 380 live samples), swipe detection further tuned (uprightness gate, palm orientation gate, last-frame fire, DEBUG_GESTURES flag), README fully updated. **Deadline: March 5, 2026 (2 days remaining).**
 
-**Current state (2026-03-03)**: Full system operational. All four services running. Student model v5 deployed. Safe mode relabeled "observe only". `build_calibration.py` wired to both eval clips and live verifier logs (`verifier_events.jsonl`). Cosmos performance: 98.6% TP recall, 90.1% hard negative rejection across 151 clips. Student: 88.2% accuracy (380 samples), <10ms inference.
+**Current state (2026-03-05)**: Full system operational. All four services running. Student model v7 deployed (XGBoost, 94.3% Cosmos agreement, 946 samples, <10ms inference). Safe mode labeled "observe only". Cosmos performance: 98.6% TP recall, 90.1% hard negative rejection across 151 clips. README fully updated for submission. Demo video recorded.
 
 **Remaining before submission:**
-- [ ] Accumulate NEG data in safe mode → retrain student v6
-- [ ] Update README with student model progression table
-- [ ] Demo video (under 3 min)
+- [x] Student model v7 trained (XGBoost, 94.3% agreement, 946 samples)
+- [x] README updated
+- [x] Demo video (https://youtu.be/qUx0bgGW2z8)
 - [ ] Submit via GitHub issue using Cosmos Cookoff template
 
 ---
@@ -62,8 +62,7 @@ Reviewed every file in `docs/`. Changes made:
 - Prints source breakdown: eval events / live log events / total / skipped counts
 
 ### Infrastructure notes
-- DGX Spark: SSH via `ssh spark-3527` (user `joonj14`); Cosmos Reason 2 via vLLM on port 8000; verifier on port 8788
-- GitHub push pending: got HTTP 500 from GitHub during push attempt (their outage); local commit `5bff6be` ready to push when resolved
+- DGX Spark (or any GPU server): Cosmos Reason 2 via vLLM on port 8000; verifier on port 8788 in a tmux session. See README Quick Start for vLLM Docker setup.
 
 ### Next session priorities
 1. Run in safe mode (observe only) to accumulate NEG training data from real usage — live verifier logs will populate `verifier_events.jsonl` with Cosmos-labeled events
@@ -192,7 +191,7 @@ Swipe suppression:         only during PALM_OPENED or FIST_SEEN (not all of open
 ### 1. Wake DGX Spark and verify Cosmos
 Physical access needed. Power on, then:
 ```bash
-ssh user@192.168.1.250
+ssh user@<DGX_IP>
 tmux attach -t cosmos       # check if vLLM still running
 curl -s http://localhost:8000/health
 curl -s http://localhost:8788/health
@@ -207,7 +206,7 @@ NIM_ENABLED=1 COSMOS_NIM_URL=http://localhost:8000 ./scripts/run_verifier.sh
 ./scripts/run_executor.sh            # :8787
 ./scripts/run_student.sh             # :8789
 ./scripts/run_web.sh                 # :5173
-# Open: http://localhost:5173/?verifier=http://192.168.1.250:8788&student=http://localhost:8789
+# Open: http://localhost:5173/?verifier=http://<DGX_IP>:8788&student=http://localhost:8789
 ```
 
 Recording workflow:
@@ -219,7 +218,7 @@ Recording workflow:
 
 ### 3. Run Cosmos eval on recorded clips
 ```bash
-python scripts/eval_cosmos.py --verifier http://192.168.1.250:8788 --clips eval_session_{ts}.json
+python scripts/eval_cosmos.py --verifier http://<DGX_IP>:8788 --clips eval_session_{ts}.json
 ```
 This prints precision/recall/F1 table and confusion matrix. Save this output — it's the metrics table for the submission.
 
@@ -263,10 +262,10 @@ Under 3 minutes:
 - Student (Python, :8789): Real-time execute/suppress classifier (scikit-learn, shadow mode by default)
 
 **Hardware:**
-- DGX Spark (GB10, 128 GB, Ubuntu arm64) at 192.168.1.250 — Cosmos Reason 2 via vLLM on port 8000, verifier on port 8788 in tmux session "cosmos". **Currently unreachable — needs physical wake.**
+- DGX Spark (GB10, 128 GB, Ubuntu arm64) at <DGX_IP> — Cosmos Reason 2 via vLLM on port 8000, verifier on port 8788 in tmux session "cosmos". **Currently unreachable — needs physical wake.**
 - MacBook Air (Apple Silicon) — web app + executor + student run locally, connects to remote verifier
 
-**Connection from Mac:** `http://localhost:5173/?verifier=http://192.168.1.250:8788&student=http://localhost:8789`
+**Connection from Mac:** `http://localhost:5173/?verifier=http://<DGX_IP>:8788&student=http://localhost:8789`
 
 **Cosmos latency:** 5.8–8.4 s per call. Architecture: async verification is the teacher (labels training data); student classifier is the real-time gatekeeper.
 
@@ -441,11 +440,11 @@ f97329d  feat: recording state cycle with visual feedback, clip playback preview
 ./scripts/run_executor.sh            # :8787
 ./scripts/run_student.sh             # :8789  (shadow mode by default)
 ./scripts/run_web.sh                 # :5173
-# On DGX Spark (192.168.1.250):
+# On DGX Spark (<DGX_IP>):
 NIM_ENABLED=1 COSMOS_NIM_URL=http://localhost:8000 ./scripts/run_verifier.sh   # :8788
 
 # Open in browser:
-http://localhost:5173/?verifier=http://192.168.1.250:8788&student=http://localhost:8789
+http://localhost:5173/?verifier=http://<DGX_IP>:8788&student=http://localhost:8789
 ```
 
 Test keys: `1` OPEN_MENU, `2` CLOSE_MENU, `3` SWITCH_RIGHT, `4` SWITCH_LEFT

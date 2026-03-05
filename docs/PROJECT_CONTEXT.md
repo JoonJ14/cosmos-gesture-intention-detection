@@ -130,6 +130,6 @@ The architecture supports — and has implemented — a continuous improvement l
 5. The student model provides real-time execute/suppress decisions (<10ms inference)
 6. Safe mode (observe only) shows Student and Cosmos decisions side by side for comparison
 
-**Current status (Phase 1 operational):** 100% of proposals go to Cosmos for labeling. Student model (88.2% accuracy, 380 training samples) runs in parallel. Phase 2 (50% Cosmos sampling at 90% agreement) and Phase 3 (10–20% spot-check at 95% agreement) are designed but not yet activated.
+**Current status (Phase 1 operational):** 100% of proposals go to Cosmos for labeling. Student model v7 (XGBoost, 94.3% Cosmos agreement, 946 training samples) runs in parallel. Phase 2 (50% Cosmos sampling at 90% agreement) and Phase 3 (10–20% spot-check at 95% agreement) are designed but not yet activated.
 
 **Cosmos is the teacher, not the student.** We never fine-tune Cosmos. We train a small local model on Cosmos's labels. See `docs/OPTION2_RISKS_AND_MITIGATIONS.md` for the full design, failure modes, and safeguards.
