@@ -29,36 +29,40 @@ Cosmos earns its role by solving what heuristics fundamentally cannot: distingui
 ## Architecture
 
 ```
-┌───────────────────────────────────────────────┐
-│               Web App (JS, :5173)             │
-│  MediaPipe Hands · Gesture state machine      │
-│  Ring buffer · Confidence scoring · Overlay   │
-└──────────────┬──────────────────────┬─────────┘
-               │ real-time proposal   │ async evidence frames
-               ▼                      ▼
-┌─────────────────────────┐  ┌────────────────────────────────────────┐
-│  Student Classifier     │  │      Verifier Service (PY, :8788)      │
-│  (PY, :8789)            │◄─│                                        │
-│  XGBoost · <10ms        │  │  Phase 1: all proposals → Cosmos       │
-│  execute / suppress     │  │  Phase 2: ~50% once agreement > 90%    │
-└──────────┬──────────────┘  │  Phase 3: ~10% spot-check, > 95%      │
-  execute=True               │               │                        │
-           │                 │               ▼                        │
-           │                 │  ┌──────────────────────────────────┐  │
-           │                 │  │  Cosmos Reason 2                 │  │
-           │                 │  │  Teacher: labels every proposal  │  │
-           │                 │  │  Labels feed back → retrains     │  │
-           │                 │  │  Student Classifier              │  │
-           │                 │  └──────────────────────────────────┘  │
-           │                 └────────────────────────────────────────┘
-           ▼
-┌──────────────────────┐
-│  Executor (PY, :8787)│
-│  xdotool / osascript │
-└──────────────────────┘
+    ┌───────────────────────────────────────────────┐
+    │               Web App (JS, :5173)             │
+    │  MediaPipe Hands · Gesture state machine      │
+    │  Ring buffer · Confidence scoring · Overlay   │
+    └───────────────────────┬───────────────────────┘
+                            │ gesture proposals
+                            v
+        ┌───────────────────────────────────────────┐
+        │       Verifier Service (PY, :8788)        │
+        │                                           │
+        │  ┌─────────────────────────────────────┐  │
+        │  │  Student ML Model (local)           │  │◄──────────────────────────────────┐
+        │  │  Lightweight intent classifier      │  │                                   │
+        │  └──────────────┬──────────────────────┘  │  feedback loop:                   │
+        │     Phase 1: all proposals → Cosmos       │  trains lightweight               │
+        │     Phase 2: ~50% once agreement > 90%    │  student model over time          │
+        │     Phase 3: ~10% spot-check, > 95%       │  to improve performance           │
+        │                 │                         │                                   │
+        │                 v                         │                                   │
+        │  ┌─────────────────────────────────────┐  │                                   │
+        │  │  Cosmos Reason 2                    │  │───────────────────────────────────┘
+        │  │  Teacher: labels every proposal     │  │
+        │  │  Labels feed back → trains Student  │  │
+        │  └─────────────────────────────────────┘  │
+        └────────────────────┬──────────────────────┘
+                             │ intentional=True
+                             v
+                  ┌──────────────────────┐
+                  │  Executor (PY, :8787)│
+                  │  xdotool / osascript │
+                  └──────────────────────┘
 ```
 
-**Decision flow:** The web app sends each gesture proposal to two services in parallel: the Student Classifier (:8789) for a real-time execute/suppress decision, and the Verifier (:8788) for async Cosmos labeling. Cosmos labels feed back to continuously retrain the Student, reducing Cosmos sampling over time (Phase 1→3). When the Student says execute, the action is forwarded to the Executor. See [Architecture Diagrams](docs/ARCHITECTURE_DIAGRAMS.md) for full details.
+**Decision flow:** Gesture proposals from the web app pass through the Student ML Model, which routes a sampled percentage to Cosmos Reason 2 for labeling. Cosmos labels feed back to continuously retrain the Student, reducing Cosmos sampling over time (Phase 1→3). Verified intentional gestures are forwarded to the Executor for OS action. See [Architecture Diagrams](docs/ARCHITECTURE_DIAGRAMS.md) for full details.
 
 ## Gestures
 
