@@ -1,6 +1,6 @@
-# Cosmos Gesture Agent
+# Cosmos Intent Engine — Scalable Motion Intelligence in Real Time
 
-**A real-time webcam gesture agent with VLM-based intent verification — solving the false positive problem in continuous spatial tracking.**
+**Real-time intent verification for continuous spatial tracking — using NVIDIA Cosmos Reason 2 to distinguish deliberate commands from incidental motion at scale.**
 
 > NVIDIA Cosmos Cookoff 2026 Submission
 
